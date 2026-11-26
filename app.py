@@ -58,51 +58,86 @@ def get_api_key() -> str:
 
 def apply_theme(dark_mode: bool) -> None:
     if dark_mode:
-        bg_main = "linear-gradient(160deg, #0F172A 0%, #131B2E 50%, #18182C 100%)"
-        bg_sidebar = "linear-gradient(180deg, #111827 0%, #161B2E 100%)"
-        card_bg = "rgba(30, 41, 59, 0.65)"
-        card_border = "rgba(129, 140, 248, 0.22)"
-        input_bg = "#1E293B"
-        text_color = "#F1F5F9"
-        shadow = "0 8px 24px rgba(15, 23, 42, 0.45)"
+        bg_main = "#09090B"
+        bg_sidebar = "#111113"
+        card_bg = "#141417"
+        card_border = "#27272A"
+        input_bg = "#18181B"
+        text_color = "#FAFAFA"
+        subtext_color = "#A1A1AA"
+        banner_bg = "linear-gradient(135deg, #18181B 0%, #27272A 100%)"
+        banner_border = "#3F3F46"
+        banner_title = "#FFFFFF"
+        banner_sub = "#D4D4D8"
+        primary_btn_bg = "#FFFFFF"
+        primary_btn_text = "#09090B"
+        primary_btn_hover = "#E4E4E7"
+        secondary_btn_bg = "#18181B"
+        secondary_btn_hover = "#27272A"
+        accent_color = "#FFFFFF"
+        shadow = "0 8px 24px rgba(0, 0, 0, 0.5)"
     else:
-        bg_main = "linear-gradient(160deg, #F8FAFC 0%, #F1F5F9 50%, #EEF2FF 100%)"
-        bg_sidebar = "linear-gradient(180deg, #F1F5F9 0%, #E2E8F0 100%)"
-        card_bg = "rgba(255, 255, 255, 0.92)"
-        card_border = "rgba(99, 102, 241, 0.18)"
+        bg_main = "#FAFAFA"
+        bg_sidebar = "#F4F4F5"
+        card_bg = "#FFFFFF"
+        card_border = "#E4E4E7"
         input_bg = "#FFFFFF"
-        text_color = "#1E293B"
-        shadow = "0 6px 20px rgba(30, 41, 59, 0.07)"
+        text_color = "#09090B"
+        subtext_color = "#52525B"
+        banner_bg = "linear-gradient(135deg, #09090B 0%, #27272A 100%)"
+        banner_border = "#18181B"
+        banner_title = "#FFFFFF"
+        banner_sub = "#E4E4E7"
+        primary_btn_bg = "#09090B"
+        primary_btn_text = "#FFFFFF"
+        primary_btn_hover = "#27272A"
+        secondary_btn_bg = "#F4F4F5"
+        secondary_btn_hover = "#E4E4E7"
+        accent_color = "#09090B"
+        shadow = "0 4px 16px rgba(0, 0, 0, 0.05)"
 
     st.markdown(
         f"""
         <style>
-        /* Hide Streamlit Top Bar, GitHub Icon, Deploy Button & Footer */
+        /* Hide Streamlit Top Bar, GitHub Icon, Deploy Button & Hosted Badge */
         header[data-testid="stHeader"] {{
             background: transparent !important;
         }}
         [data-testid="stToolbar"],
         [data-testid="stDecoration"],
         [data-testid="stStatusWidget"],
+        [data-testid="stAppDeployButton"],
+        [data-testid="manage-app-button"],
         .stAppDeployButton,
+        .viewerBadge_container__r5tak,
+        .viewerBadge_link__qRIco,
+        div[class*="viewerBadge"],
+        div[class*="StatusWidget"],
+        div[class*="profileContainer"],
+        a[href*="streamlit.io"],
         #MainMenu,
         footer {{
             display: none !important;
             visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            height: 0 !important;
+            width: 0 !important;
         }}
         .block-container {{
             padding-top: 1.5rem !important;
+            padding-bottom: 1.5rem !important;
         }}
 
         /* Main App Background */
         .stApp {{
-            background: {bg_main};
+            background-color: {bg_main};
             color: {text_color};
         }}
 
         /* Sidebar Styling */
         [data-testid="stSidebar"] {{
-            background: {bg_sidebar};
+            background-color: {bg_sidebar};
             border-right: 1px solid {card_border};
         }}
 
@@ -111,34 +146,34 @@ def apply_theme(dark_mode: bool) -> None:
             color: {text_color};
         }}
 
-        /* Calm Gradient Header Banner */
+        /* Monochrome Header Banner */
         .hero-banner {{
-            background: linear-gradient(135deg, #3B5998 0%, #5B6AD0 55%, #7668B8 100%);
-            padding: 1.35rem 1.75rem;
-            border-radius: 16px;
-            box-shadow: 0 8px 24px rgba(79, 70, 229, 0.22);
+            background: {banner_bg};
+            padding: 1.4rem 1.8rem;
+            border-radius: 14px;
+            box-shadow: {shadow};
             margin-bottom: 1.1rem;
-            border: 1px solid rgba(255, 255, 255, 0.14);
+            border: 1px solid {banner_border};
         }}
         .hero-banner h1 {{
-            color: #FFFFFF !important;
+            color: {banner_title} !important;
             margin: 0;
             font-size: 1.85rem;
-            font-weight: 700;
-            letter-spacing: -0.3px;
+            font-weight: 800;
+            letter-spacing: -0.4px;
         }}
         .hero-banner p {{
-            color: #E2E8F0 !important;
-            margin: 0.3rem 0 0 0;
+            color: {banner_sub} !important;
+            margin: 0.35rem 0 0 0;
             font-size: 0.95rem;
         }}
 
-        /* Calm Score Summary Card */
+        /* Monochrome Score Summary Card */
         .score-banner {{
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.14) 0%, rgba(124, 58, 237, 0.16) 100%);
-            border: 1px solid rgba(129, 140, 248, 0.45);
+            background: {card_bg};
+            border: 1.5px solid {accent_color};
             border-radius: 14px;
-            padding: 1rem 1.4rem;
+            padding: 1.05rem 1.45rem;
             margin: 0.8rem 0 1.1rem 0;
             display: flex;
             justify-content: space-between;
@@ -148,36 +183,40 @@ def apply_theme(dark_mode: bool) -> None:
 
         /* Containers & Cards */
         [data-testid="stVerticalBlockBorderWrapper"] {{
-            background: {card_bg};
+            background-color: {card_bg};
             border: 1px solid {card_border} !important;
             border-radius: 14px !important;
             box-shadow: {shadow};
-            backdrop-filter: blur(8px);
             padding: 0.35rem;
             transition: transform 0.2s ease, border-color 0.2s ease;
         }}
         [data-testid="stVerticalBlockBorderWrapper"]:hover {{
-            border-color: rgba(129, 140, 248, 0.5) !important;
+            border-color: {subtext_color} !important;
             transform: translateY(-1px);
         }}
 
-        /* Primary Buttons (Soft Blue -> Muted Indigo/Purple) */
+        /* Primary Buttons (High-Contrast Black / White) */
         .stButton > button[kind="primary"] {{
-            background: linear-gradient(135deg, #3B66B8 0%, #6366F1 55%, #7C65C4 100%) !important;
-            color: #FFFFFF !important;
-            border: none !important;
-            border-radius: 12px !important;
+            background-color: {primary_btn_bg} !important;
+            color: {primary_btn_text} !important;
+            border: 1px solid {primary_btn_bg} !important;
+            border-radius: 10px !important;
             padding: 0.6rem 1.35rem !important;
-            font-weight: 600 !important;
+            font-weight: 700 !important;
             font-size: 0.98rem !important;
             letter-spacing: 0.2px;
-            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.28) !important;
-            transition: all 0.22s ease !important;
+            box-shadow: {shadow} !important;
+            transition: all 0.2s ease !important;
+        }}
+        .stButton > button[kind="primary"] p,
+        .stButton > button[kind="primary"] span,
+        .stButton > button[kind="primary"] div {{
+            color: {primary_btn_text} !important;
         }}
         .stButton > button[kind="primary"]:hover {{
-            background: linear-gradient(135deg, #3358A1 0%, #5558D9 55%, #6D55B3 100%) !important;
+            background-color: {primary_btn_hover} !important;
+            border-color: {primary_btn_hover} !important;
             transform: translateY(-1px);
-            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.38) !important;
         }}
         .stButton > button[kind="primary"]:active {{
             transform: translateY(0px);
@@ -185,18 +224,17 @@ def apply_theme(dark_mode: bool) -> None:
 
         /* Secondary Buttons */
         .stButton > button[kind="secondary"] {{
-            background: rgba(99, 102, 241, 0.1) !important;
+            background-color: {secondary_btn_bg} !important;
             color: {text_color} !important;
-            border: 1px solid rgba(129, 140, 248, 0.4) !important;
-            border-radius: 12px !important;
+            border: 1px solid {card_border} !important;
+            border-radius: 10px !important;
             padding: 0.5rem 1.05rem !important;
-            font-weight: 500 !important;
+            font-weight: 600 !important;
             transition: all 0.2s ease !important;
         }}
         .stButton > button[kind="secondary"]:hover {{
-            background: linear-gradient(135deg, #4B6CB7, #6D63B8) !important;
-            color: #FFFFFF !important;
-            border-color: transparent !important;
+            background-color: {secondary_btn_hover} !important;
+            border-color: {subtext_color} !important;
             transform: translateY(-1px);
         }}
 
@@ -209,38 +247,43 @@ def apply_theme(dark_mode: bool) -> None:
             padding: 0.55rem 0.85rem !important;
         }}
         .stTextInput input:focus {{
-            border-color: #818CF8 !important;
-            box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2) !important;
+            border-color: {accent_color} !important;
+            box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.25) !important;
         }}
 
         [data-testid="stFileUploaderDropzone"] {{
-            background: {card_bg} !important;
-            border: 1.5px dashed rgba(129, 140, 248, 0.55) !important;
-            border-radius: 14px !important;
+            background-color: {card_bg} !important;
+            border: 1.5px dashed {subtext_color} !important;
+            border-radius: 12px !important;
             padding: 1.15rem !important;
         }}
         [data-testid="stFileUploaderDropzone"]:hover {{
-            border-color: #818CF8 !important;
-            background: rgba(99, 102, 241, 0.06) !important;
+            border-color: {accent_color} !important;
+            background-color: {secondary_btn_bg} !important;
         }}
 
         /* Metric Styling */
         [data-testid="stMetric"] {{
-            background: {card_bg};
+            background-color: {card_bg};
             border: 1px solid {card_border};
             border-radius: 12px;
             padding: 0.75rem 0.95rem;
         }}
         [data-testid="stMetricValue"] {{
-            background: linear-gradient(90deg, #60A5FA, #A78BFA);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-weight: 700 !important;
+            color: {text_color} !important;
+            font-weight: 800 !important;
+        }}
+
+        /* Alerts (st.info) Monochrome Clean */
+        [data-testid="stAlert"] {{
+            background-color: {secondary_btn_bg} !important;
+            border: 1px solid {card_border} !important;
+            border-radius: 10px !important;
         }}
 
         /* Radio accent */
         input[type="radio"] {{
-            accent-color: #6366F1 !important;
+            accent-color: {accent_color} !important;
         }}
 
         /* Divider */
@@ -379,7 +422,7 @@ if "my_last_result" not in st.session_state:
 if "last_meta" not in st.session_state:
     st.session_state.last_meta = None
 if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = True
+    st.session_state.dark_mode = False
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 if "is_grading" not in st.session_state:
@@ -519,15 +562,18 @@ else:
         if st.session_state.last_meta:
             st.caption(st.session_state.last_meta)
 
+        badge_bg = "#FFFFFF" if st.session_state.dark_mode else "#09090B"
+        badge_text = "#09090B" if st.session_state.dark_mode else "#FFFFFF"
+
         st.markdown(
             f"""
             <div class="score-banner">
                 <div>
-                    <span style="font-size: 0.9rem; opacity: 0.85;">FINAL STUDENT SCORE</span>
-                    <h2 style="margin: 0; font-size: 1.8rem;">🏆 {res.total_score} / {res.total_max_score}</h2>
+                    <span style="font-size: 0.85rem; opacity: 0.75; font-weight: 600;">FINAL STUDENT SCORE</span>
+                    <h2 style="margin: 0; font-size: 1.85rem; font-weight: 800;">🏆 {res.total_score} / {res.total_max_score}</h2>
                 </div>
                 <div style="text-align: right;">
-                    <span style="background: linear-gradient(135deg, #3B66B8, #7C65C4); color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
+                    <span style="background: {badge_bg}; color: {badge_text}; padding: 6px 14px; border-radius: 20px; font-weight: 700; font-size: 0.88rem;">
                         {len(res.questions)} Question(s) Evaluated
                     </span>
                 </div>
