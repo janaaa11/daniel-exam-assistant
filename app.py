@@ -58,25 +58,42 @@ def get_api_key() -> str:
 
 def apply_theme(dark_mode: bool) -> None:
     if dark_mode:
-        bg_main = "radial-gradient(circle at top left, #161836 0%, #0B0D1D 55%, #120E29 100%)"
-        bg_sidebar = "linear-gradient(180deg, #131633 0%, #0D0F24 100%)"
-        card_bg = "rgba(25, 29, 63, 0.72)"
-        card_border = "rgba(139, 92, 246, 0.35)"
-        input_bg = "#171A3B"
-        text_color = "#F8FAFC"
-        shadow = "0 10px 30px rgba(15, 12, 41, 0.55)"
+        bg_main = "linear-gradient(160deg, #0F172A 0%, #131B2E 50%, #18182C 100%)"
+        bg_sidebar = "linear-gradient(180deg, #111827 0%, #161B2E 100%)"
+        card_bg = "rgba(30, 41, 59, 0.65)"
+        card_border = "rgba(129, 140, 248, 0.22)"
+        input_bg = "#1E293B"
+        text_color = "#F1F5F9"
+        shadow = "0 8px 24px rgba(15, 23, 42, 0.45)"
     else:
-        bg_main = "radial-gradient(circle at top left, #EEF2FF 0%, #F5F3FF 50%, #E0E7FF 100%)"
-        bg_sidebar = "linear-gradient(180deg, #EDE9FE 0%, #E0E7FF 100%)"
-        card_bg = "rgba(255, 255, 255, 0.88)"
-        card_border = "rgba(99, 102, 241, 0.3)"
+        bg_main = "linear-gradient(160deg, #F8FAFC 0%, #F1F5F9 50%, #EEF2FF 100%)"
+        bg_sidebar = "linear-gradient(180deg, #F1F5F9 0%, #E2E8F0 100%)"
+        card_bg = "rgba(255, 255, 255, 0.92)"
+        card_border = "rgba(99, 102, 241, 0.18)"
         input_bg = "#FFFFFF"
-        text_color = "#1E1B4B"
-        shadow = "0 10px 25px rgba(79, 70, 229, 0.12)"
+        text_color = "#1E293B"
+        shadow = "0 6px 20px rgba(30, 41, 59, 0.07)"
 
     st.markdown(
         f"""
         <style>
+        /* Hide Streamlit Top Bar, GitHub Icon, Deploy Button & Footer */
+        header[data-testid="stHeader"] {{
+            background: transparent !important;
+        }}
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        .stAppDeployButton,
+        #MainMenu,
+        footer {{
+            display: none !important;
+            visibility: hidden !important;
+        }}
+        .block-container {{
+            padding-top: 1.5rem !important;
+        }}
+
         /* Main App Background */
         .stApp {{
             background: {bg_main};
@@ -94,35 +111,35 @@ def apply_theme(dark_mode: bool) -> None:
             color: {text_color};
         }}
 
-        /* Gradient Header Banner */
+        /* Calm Gradient Header Banner */
         .hero-banner {{
-            background: linear-gradient(135deg, #2563EB 0%, #6366F1 50%, #9333EA 100%);
-            padding: 1.4rem 1.8rem;
-            border-radius: 18px;
-            box-shadow: 0 12px 32px rgba(99, 102, 241, 0.35);
-            margin-bottom: 1.2rem;
-            border: 1px solid rgba(255, 255, 255, 0.18);
+            background: linear-gradient(135deg, #3B5998 0%, #5B6AD0 55%, #7668B8 100%);
+            padding: 1.35rem 1.75rem;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(79, 70, 229, 0.22);
+            margin-bottom: 1.1rem;
+            border: 1px solid rgba(255, 255, 255, 0.14);
         }}
         .hero-banner h1 {{
             color: #FFFFFF !important;
             margin: 0;
-            font-size: 1.95rem;
-            font-weight: 800;
-            letter-spacing: -0.5px;
+            font-size: 1.85rem;
+            font-weight: 700;
+            letter-spacing: -0.3px;
         }}
         .hero-banner p {{
-            color: #E0E7FF !important;
-            margin: 0.35rem 0 0 0;
-            font-size: 0.98rem;
+            color: #E2E8F0 !important;
+            margin: 0.3rem 0 0 0;
+            font-size: 0.95rem;
         }}
 
-        /* Score Summary Card */
+        /* Calm Score Summary Card */
         .score-banner {{
-            background: linear-gradient(135deg, rgba(37, 99, 235, 0.22) 0%, rgba(147, 51, 234, 0.25) 100%);
-            border: 1.5px solid #8B5CF6;
-            border-radius: 16px;
-            padding: 1.1rem 1.5rem;
-            margin: 0.8rem 0 1.2rem 0;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.14) 0%, rgba(124, 58, 237, 0.16) 100%);
+            border: 1px solid rgba(129, 140, 248, 0.45);
+            border-radius: 14px;
+            padding: 1rem 1.4rem;
+            margin: 0.8rem 0 1.1rem 0;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -133,98 +150,97 @@ def apply_theme(dark_mode: bool) -> None:
         [data-testid="stVerticalBlockBorderWrapper"] {{
             background: {card_bg};
             border: 1px solid {card_border} !important;
-            border-radius: 16px !important;
+            border-radius: 14px !important;
             box-shadow: {shadow};
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(8px);
             padding: 0.35rem;
             transition: transform 0.2s ease, border-color 0.2s ease;
         }}
         [data-testid="stVerticalBlockBorderWrapper"]:hover {{
-            border-color: #8B5CF6 !important;
-            transform: translateY(-2px);
+            border-color: rgba(129, 140, 248, 0.5) !important;
+            transform: translateY(-1px);
         }}
 
-        /* Primary Buttons (Blue -> Purple Gradient) */
+        /* Primary Buttons (Soft Blue -> Muted Indigo/Purple) */
         .stButton > button[kind="primary"] {{
-            background: linear-gradient(135deg, #2563EB 0%, #7C3AED 55%, #9333EA 100%) !important;
+            background: linear-gradient(135deg, #3B66B8 0%, #6366F1 55%, #7C65C4 100%) !important;
             color: #FFFFFF !important;
             border: none !important;
-            border-radius: 14px !important;
-            padding: 0.65rem 1.4rem !important;
-            font-weight: 700 !important;
-            font-size: 1rem !important;
-            letter-spacing: 0.3px;
-            box-shadow: 0 6px 20px rgba(124, 58, 237, 0.4) !important;
-            transition: all 0.25s ease !important;
+            border-radius: 12px !important;
+            padding: 0.6rem 1.35rem !important;
+            font-weight: 600 !important;
+            font-size: 0.98rem !important;
+            letter-spacing: 0.2px;
+            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.28) !important;
+            transition: all 0.22s ease !important;
         }}
         .stButton > button[kind="primary"]:hover {{
-            background: linear-gradient(135deg, #1D4ED8 0%, #6D28D9 50%, #7E22CE 100%) !important;
-            transform: translateY(-2px) scale(1.01);
-            box-shadow: 0 10px 26px rgba(124, 58, 237, 0.6) !important;
+            background: linear-gradient(135deg, #3358A1 0%, #5558D9 55%, #6D55B3 100%) !important;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.38) !important;
         }}
         .stButton > button[kind="primary"]:active {{
-            transform: translateY(0px) scale(0.99);
+            transform: translateY(0px);
         }}
 
         /* Secondary Buttons */
         .stButton > button[kind="secondary"] {{
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(139, 92, 246, 0.18)) !important;
+            background: rgba(99, 102, 241, 0.1) !important;
             color: {text_color} !important;
-            border: 1.5px solid #6366F1 !important;
-            border-radius: 14px !important;
-            padding: 0.55rem 1.1rem !important;
-            font-weight: 600 !important;
-            transition: all 0.22s ease !important;
+            border: 1px solid rgba(129, 140, 248, 0.4) !important;
+            border-radius: 12px !important;
+            padding: 0.5rem 1.05rem !important;
+            font-weight: 500 !important;
+            transition: all 0.2s ease !important;
         }}
         .stButton > button[kind="secondary"]:hover {{
-            background: linear-gradient(135deg, #3B82F6, #8B5CF6) !important;
+            background: linear-gradient(135deg, #4B6CB7, #6D63B8) !important;
             color: #FFFFFF !important;
             border-color: transparent !important;
-            transform: translateY(-2px);
-            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35) !important;
+            transform: translateY(-1px);
         }}
 
         /* Text Inputs & File Uploader */
         .stTextInput input {{
             background-color: {input_bg} !important;
             color: {text_color} !important;
-            border: 1.5px solid {card_border} !important;
-            border-radius: 12px !important;
-            padding: 0.6rem 0.9rem !important;
+            border: 1px solid {card_border} !important;
+            border-radius: 10px !important;
+            padding: 0.55rem 0.85rem !important;
         }}
         .stTextInput input:focus {{
-            border-color: #8B5CF6 !important;
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25) !important;
+            border-color: #818CF8 !important;
+            box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2) !important;
         }}
 
         [data-testid="stFileUploaderDropzone"] {{
             background: {card_bg} !important;
-            border: 2px dashed #6366F1 !important;
-            border-radius: 16px !important;
-            padding: 1.2rem !important;
+            border: 1.5px dashed rgba(129, 140, 248, 0.55) !important;
+            border-radius: 14px !important;
+            padding: 1.15rem !important;
         }}
         [data-testid="stFileUploaderDropzone"]:hover {{
-            border-color: #A855F7 !important;
-            background: rgba(139, 92, 246, 0.1) !important;
+            border-color: #818CF8 !important;
+            background: rgba(99, 102, 241, 0.06) !important;
         }}
 
         /* Metric Styling */
         [data-testid="stMetric"] {{
             background: {card_bg};
             border: 1px solid {card_border};
-            border-radius: 14px;
-            padding: 0.8rem 1rem;
+            border-radius: 12px;
+            padding: 0.75rem 0.95rem;
         }}
         [data-testid="stMetricValue"] {{
-            background: linear-gradient(90deg, #3B82F6, #A855F7);
+            background: linear-gradient(90deg, #60A5FA, #A78BFA);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            font-weight: 800 !important;
+            font-weight: 700 !important;
         }}
 
         /* Radio accent */
         input[type="radio"] {{
-            accent-color: #8B5CF6 !important;
+            accent-color: #6366F1 !important;
         }}
 
         /* Divider */
@@ -511,7 +527,7 @@ else:
                     <h2 style="margin: 0; font-size: 1.8rem;">🏆 {res.total_score} / {res.total_max_score}</h2>
                 </div>
                 <div style="text-align: right;">
-                    <span style="background: linear-gradient(135deg, #2563EB, #9333EA); color: white; padding: 6px 14px; border-radius: 20px; font-weight: 700; font-size: 0.9rem;">
+                    <span style="background: linear-gradient(135deg, #3B66B8, #7C65C4); color: white; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem;">
                         {len(res.questions)} Question(s) Evaluated
                     </span>
                 </div>
