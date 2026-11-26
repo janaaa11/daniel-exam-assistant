@@ -99,11 +99,10 @@ def apply_theme(dark_mode: bool) -> None:
     st.markdown(
         f"""
         <style>
-        /* Hide Streamlit Top Bar, GitHub Icon, Deploy Button & Hosted Badge */
+        /* Hide Deploy Button, GitHub Icon & Hosted Badge while keeping Sidebar Toggle */
         header[data-testid="stHeader"] {{
             background: transparent !important;
         }}
-        [data-testid="stToolbar"],
         [data-testid="stDecoration"],
         [data-testid="stStatusWidget"],
         [data-testid="stAppDeployButton"],
@@ -125,7 +124,7 @@ def apply_theme(dark_mode: bool) -> None:
             width: 0 !important;
         }}
         .block-container {{
-            padding-top: 1.5rem !important;
+            padding-top: 2.2rem !important;
             padding-bottom: 1.5rem !important;
         }}
 
@@ -149,10 +148,10 @@ def apply_theme(dark_mode: bool) -> None:
         /* Monochrome Header Banner */
         .hero-banner {{
             background: {banner_bg};
-            padding: 1.4rem 1.8rem;
+            padding: 1.35rem 1.75rem;
             border-radius: 14px;
             box-shadow: {shadow};
-            margin-bottom: 1.1rem;
+            margin-bottom: 1rem;
             border: 1px solid {banner_border};
         }}
         .hero-banner h1 {{
@@ -449,7 +448,38 @@ with header_col2:
         st.session_state.dark_mode = not st.session_state.dark_mode
         st.rerun()
 
-# Sidebar
+# Always-Visible Session & Counter Bar (Works on both Mobile & Desktop)
+with st.container(border=True):
+    bar_col1, bar_col2, bar_col3, bar_col4 = st.columns([2.2, 1.5, 1.3, 1.6])
+    with bar_col1:
+        st.markdown(f"📖 **Reference Book:** `{book_data['source_file']}`")
+    with bar_col2:
+        st.markdown(f"👨‍🎓 **Students Graded:** **{shared['total_graded_papers']}**")
+    with bar_col3:
+        if not shared["session_finished"] and shared["total_graded_papers"] > 0:
+            if st.button("↩️ Undo (-1)", key="top_undo", use_container_width=True):
+                with shared["lock"]:
+                    if shared["total_graded_papers"] > 0:
+                        shared["total_graded_papers"] -= 1
+                st.rerun()
+    with bar_col4:
+        if not shared["session_finished"]:
+            if st.button("🏁 End & Submit Session", key="top_end", type="primary", use_container_width=True):
+                with shared["lock"]:
+                    shared["session_finished"] = True
+                st.rerun()
+        else:
+            if st.button("🔄 Start New Session", key="top_new", type="primary", use_container_width=True):
+                with shared["lock"]:
+                    shared["total_graded_papers"] = 0
+                    shared["session_finished"] = False
+                    shared["shared_marks_distribution"] = ""
+                st.session_state.my_last_result = None
+                st.session_state.last_meta = None
+                st.session_state.uploader_key += 1
+                st.rerun()
+
+# Sidebar (Also kept in sync)
 with st.sidebar:
     st.markdown("### 📊 Session Dashboard")
     st.info(f"📖 **Reference Book:**\n\n{book_data['source_file']}")
@@ -457,15 +487,25 @@ with st.sidebar:
 
     if not shared["session_finished"]:
         if shared["total_graded_papers"] > 0:
-            if st.button("↩️ Undo Last Student (-1)", use_container_width=True):
+            if st.button("↩️ Undo Last Student (-1)", key="side_undo", use_container_width=True):
                 with shared["lock"]:
                     if shared["total_graded_papers"] > 0:
                         shared["total_graded_papers"] -= 1
                 st.rerun()
         st.divider()
-        if st.button("🏁 End Session & Submit", type="primary", use_container_width=True):
+        if st.button("🏁 End Session & Submit", key="side_end", type="primary", use_container_width=True):
             with shared["lock"]:
                 shared["session_finished"] = True
+            st.rerun()
+    else:
+        if st.button("🔄 Start New Session", key="side_new", type="primary", use_container_width=True):
+            with shared["lock"]:
+                shared["total_graded_papers"] = 0
+                shared["session_finished"] = False
+                shared["shared_marks_distribution"] = ""
+            st.session_state.my_last_result = None
+            st.session_state.last_meta = None
+            st.session_state.uploader_key += 1
             st.rerun()
 
 # Main Workspace
@@ -475,7 +515,7 @@ if shared["session_finished"]:
         f"🎉 Session completed! Total number of students graded in this session: "
         f"**{shared['total_graded_papers']}** students."
     )
-    if st.button("🔄 Start New Session", type="primary"):
+    if st.button("🔄 Start New Session", key="main_new", type="primary"):
         with shared["lock"]:
             shared["total_graded_papers"] = 0
             shared["session_finished"] = False
