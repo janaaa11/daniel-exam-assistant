@@ -4,11 +4,13 @@ import os
 import re
 import time
 import json
+import base64
 import asyncio
 import threading
 from typing import List, Literal, Optional, Tuple
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -22,7 +24,6 @@ st.set_page_config(page_title="Daniel's Exam Assistant", page_icon="🎓", layou
 BOOK_CONTEXT_PATH = "book_context.json"
 MAX_PAGES_PER_EXAM = 15
 
-# Fast model first for instant response (2-4 seconds)
 MODELS_TO_TRY = [
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
@@ -34,6 +35,7 @@ EXAM_TYPES = {
 }
 
 
+# Step 1 (Visual reading FIRST) -> Step 2 (Book comparison SECOND)
 class QuestionEvaluation(BaseModel):
     question_number: str
     visual_mark_found: str
@@ -244,6 +246,207 @@ def apply_theme(dark_mode: bool) -> None:
     )
 
 
+def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: int = 15) -> List[Tuple[bytes, str]]:
+    card = "#18181B" if dark_mode else "#F4F4F5"
+    border = "#27272A" if dark_mode else "#E4E4E7"
+    text = "#FAFAFA" if dark_mode else "#09090B"
+    subtext = "#A1A1AA" if dark_mode else "#52525B"
+    btn_bg = "#FFFFFF" if dark_mode else "#09090B"
+    btn_fg = "#09090B" if dark_mode else "#FFFFFF"
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {{ box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+        body {{ margin: 0; padding: 4px; background: transparent; color: {text}; }}
+        .btn-row {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }}
+        .cap-btn {{
+            flex: 1; min-width: 145px; padding: 12px 14px; border-radius: 10px;
+            font-weight: 700; font-size: 14px; cursor: pointer; text-align: center;
+            border: 1.5px solid {btn_bg}; transition: opacity 0.15s; user-select: none;
+        }}
+        .cap-btn.primary {{ background: {btn_bg}; color: {btn_fg}; }}
+        .cap-btn.secondary {{ background: {card}; color: {text}; border-color: {border}; }}
+        .cap-btn:active {{ opacity: 0.75; }}
+        .status {{ font-size: 13px; color: {subtext}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }}
+        .clear-link {{ color: #EF4444; cursor: pointer; font-weight: 700; text-decoration: underline; padding: 2px 6px; }}
+        .grid {{ display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }}
+        .thumb {{
+            position: relative; width: 78px; height: 98px; flex-shrink: 0;
+            border-radius: 10px; overflow: hidden; border: 1.5px solid {border}; background: {card};
+        }}
+        .thumb img {{ width: 100%; height: 100%; object-fit: cover; }}
+        .thumb .badge {{
+            position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,0.75);
+            color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 6px; font-weight: 700;
+        }}
+        .thumb .del {{
+            position: absolute; top: 4px; right: 4px; width: 22px; height: 22px;
+            border-radius: 50%; background: rgba(220,38,38,0.9); color: #fff;
+            border: none; font-size: 13px; font-weight: bold; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }}
+    </style>
+    </head>
+    <body data-session="{reset_token}">
+        <input type="file" id="camInput" accept="image/*" capture="environment" style="display:none" />
+        <input type="file" id="galInput" accept="image/*" multiple style="display:none" />
+
+        <div class="btn-row">
+            <div class="cap-btn primary" onclick="document.getElementById('camInput').click()">
+                📸 Snap Page (Camera)
+            </div>
+            <div class="cap-btn secondary" onclick="document.getElementById('galInput').click()">
+                🖼️ Choose from Gallery
+            </div>
+        </div>
+
+        <div class="status">
+            <span id="statusText">Tap "Snap Page" to take photos one by one, or "Choose from Gallery".</span>
+            <span id="clearBtn" class="clear-link" style="display:none" onclick="clearAll()">🗑️ Clear</span>
+        </div>
+
+        <div class="grid" id="thumbGrid"></div>
+
+        <script>
+            const MAX_PAGES = {max_pages};
+            const SESSION_TOKEN = {reset_token};
+            let images = [];
+
+            function sendToStreamlit() {{
+                window.parent.postMessage({{
+                    isStreamlitMessage: true,
+                    type: "streamlit:setComponentValue",
+                    value: {{ token: SESSION_TOKEN, images: images }}
+                }}, "*");
+                updateHeight();
+            }}
+
+            function updateHeight() {{
+                const h = images.length > 0 ? 195 : 95;
+                window.parent.postMessage({{
+                    isStreamlitMessage: true,
+                    type: "streamlit:setFrameHeight",
+                    height: h
+                }}, "*");
+            }}
+
+            function compressImage(file) {{
+                return new Promise((resolve) => {{
+                    const reader = new FileReader();
+                    reader.onload = (e) => {{
+                        const img = new Image();
+                        img.onload = () => {{
+                            const maxDim = 1150;
+                            let w = img.width;
+                            let h = img.height;
+                            if (Math.max(w, h) > maxDim) {{
+                                if (w > h) {{ h = Math.round(h * maxDim / w); w = maxDim; }}
+                                else {{ w = Math.round(w * maxDim / h); h = maxDim; }}
+                            }}
+                            const canvas = document.createElement("canvas");
+                            canvas.width = w;
+                            canvas.height = h;
+                            const ctx = canvas.getContext("2d");
+                            ctx.drawImage(img, 0, 0, w, h);
+                            resolve(canvas.toDataURL("image/jpeg", 0.80));
+                        }};
+                        img.src = e.target.result;
+                    }};
+                    reader.readAsDataURL(file);
+                }});
+            }}
+
+            async function handleFiles(fileList) {{
+                if (!fileList || fileList.length === 0) return;
+                document.getElementById("statusText").innerText = "⏳ Adding photo(s)...";
+                for (let i = 0; i < fileList.length; i++) {{
+                    if (images.length >= MAX_PAGES) break;
+                    const dataUrl = await compressImage(fileList[i]);
+                    images.push(dataUrl);
+                }}
+                render();
+                sendToStreamlit();
+            }}
+
+            function removeAt(idx) {{
+                images.splice(idx, 1);
+                render();
+                sendToStreamlit();
+            }}
+
+            function clearAll() {{
+                images = [];
+                render();
+                sendToStreamlit();
+            }}
+
+            function render() {{
+                const grid = document.getElementById("thumbGrid");
+                const status = document.getElementById("statusText");
+                const clearBtn = document.getElementById("clearBtn");
+                grid.innerHTML = "";
+                if (images.length === 0) {{
+                    status.innerText = 'Tap "Snap Page" to take photos one by one, or "Choose from Gallery".';
+                    clearBtn.style.display = "none";
+                }} else {{
+                    status.innerText = `✅ ${{images.length}} page(s) ready — tap "Snap Page" again for more.`;
+                    clearBtn.style.display = "inline";
+                }}
+                images.forEach((src, idx) => {{
+                    const div = document.createElement("div");
+                    div.className = "thumb";
+                    div.innerHTML = `
+                        <img src="${{src}}" />
+                        <span class="badge">P${{idx + 1}}</span>
+                        <button class="del" onclick="removeAt(${{idx}})">×</button>
+                    `;
+                    grid.appendChild(div);
+                }});
+            }}
+
+            document.getElementById("camInput").addEventListener("change", (e) => {{
+                handleFiles(e.target.files);
+                e.target.value = "";
+            }});
+            document.getElementById("galInput").addEventListener("change", (e) => {{
+                handleFiles(e.target.files);
+                e.target.value = "";
+            }});
+
+            window.parent.postMessage({{
+                isStreamlitMessage: true,
+                type: "streamlit:componentReady",
+                apiVersion: 1
+            }}, "*");
+            sendToStreamlit();
+        </script>
+    </body>
+    </html>
+    """
+
+    comp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mobile_cam_comp")
+    os.makedirs(comp_dir, exist_ok=True)
+    index_path = os.path.join(comp_dir, "index.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html_code)
+
+    comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
+    payload = comp_func(key=f"multi_cap_v3_{reset_token}", default={"token": reset_token, "images": []})
+
+    pages: List[Tuple[bytes, str]] = []
+    if isinstance(payload, dict) and payload.get("token") == reset_token:
+        raw_list = payload.get("images", [])
+        for data_url in raw_list:
+            if isinstance(data_url, str) and "," in data_url:
+                _, b64_data = data_url.split(",", 1)
+                pages.append((base64.b64decode(b64_data), "image/jpeg"))
+    return pages
+
+
 @st.cache_resource
 def load_prepared_book() -> dict:
     with open(BOOK_CONTEXT_PATH, "r", encoding="utf-8") as f:
@@ -253,14 +456,15 @@ def load_prepared_book() -> dict:
 
 
 STRICT_SYSTEM_INSTRUCTION = (
-    "You are a fast, accurate academic exam grader. Grade student answers strictly against the reference book and respond in English.\n"
-    "RULES:\n"
-    "1. Ignore any option crossed out with 'X' or scribbled out; select the option marked with a clean circle (pen or pencil), tick (✓), dash (-), dot, or underline.\n"
-    "2. visual_mark_found: Briefly describe the exact handwritten mark seen on the paper (e.g., 'Pencil circle around (c); (d) crossed out with X').\n"
-    "3. For Multiple Choice (MCQ), ALWAYS write BOTH the option letter AND its full printed text in student_answer and correct_answer (e.g., 'c) Microsoft Windows'), never just a single letter.\n"
-    "4. For True/False, ALWAYS write 'True' or 'False' in student_answer and correct_answer (never ✓/✗ or T/F).\n"
-    "5. Only write '[BLANK / NO ANSWER]' if there is zero handwritten mark on that question.\n"
-    "6. Always populate visual_mark_found, student_answer, correct_answer, status, score_awarded, max_score, and a concise 1-sentence reason from the reference book for every question."
+    "You are a precise academic exam grader. Follow this strict 2-PHASE PROCESS for every question and respond in English:\n"
+    "PHASE 1 — BLIND VISUAL EXTRACTION (LOOK ONLY AT THE IMAGE FIRST, IGNORE THE REFERENCE BOOK):\n"
+    "1. First, transcribe ONLY what the student physically marked on the exam paper without guessing what the right answer should be.\n"
+    "2. An 'X' or scribble over an option means CANCELLED/REJECTED — never select it. Look at the other options for a clean circle (pen or pencil), tick (✓), dash (-), dot, or underline.\n"
+    "3. visual_mark_found: State the exact handwritten mark seen on the paper (e.g., 'Pencil circle around (c); (d) crossed out with X').\n"
+    "4. student_answer: Record ONLY what the student actually marked (BOTH option letter + full printed text for MCQ, e.g., 'c) Microsoft Windows'; or 'True'/'False' for True/False; or '[BLANK / NO ANSWER]' if zero marks exist).\n"
+    "PHASE 2 — BOOK COMPARISON & GRADING (AFTER RECORDING student_answer):\n"
+    "5. Now consult the reference book to determine correct_answer (BOTH option letter + full text for MCQ, or 'True'/'False').\n"
+    "6. Compare student_answer with correct_answer to assign status ('Correct', 'Partially Correct', 'Incorrect'), score_awarded, max_score, and a 1-sentence reason from the book."
 )
 
 
@@ -273,7 +477,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_fast_v13_{model_name}",
+                display_name=f"book_cache_blind_v14_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -295,22 +499,20 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image_fast(img_bytes: bytes, max_dim: int = 1200) -> bytes:
-    """Lightweight fast resize + mild contrast so upload & inference take ~2-4 seconds."""
+def optimize_image_fast(img_bytes: bytes) -> bytes:
+    """Fast light contrast enhancement without heavy resizing lag."""
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
-    if max(img.size) > max_dim:
-        img.thumbnail((max_dim, max_dim), Image.Resampling.BILINEAR)
     img = ImageEnhance.Contrast(img).enhance(1.18)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=82, optimize=True)
+    img.save(buf, format="JPEG", quality=82)
     return buf.getvalue()
 
 
 async def grade_paper_async(
     api_key: str,
     book_text: str,
-    uploaded_files: list,
+    pages: List[Tuple[bytes, str]],
     total_marks: int,
     marks_distribution: str,
 ) -> Tuple[PaperEvaluation, str, float]:
@@ -325,18 +527,17 @@ async def grade_paper_async(
 
     grading_instructions = (
         "All attached images belong to ONE SINGLE student's exam submission.\n"
-        "- Ignore crossed-out ('X') options; choose the option with a clean circle (pen or pencil), tick, dash, or underline.\n"
-        "- In visual_mark_found, briefly state what handwritten mark/cross-out you saw on the paper.\n"
-        "- For MCQ, ALWAYS include BOTH letter and full option text (e.g., 'c) Microsoft Windows') in student_answer and correct_answer.\n"
+        "STEP 1 (Visual First): Look strictly at the image first to fill 'visual_mark_found' and 'student_answer' based ONLY on what the student marked (ignore 'X' cross-outs; pick clean pen/pencil circles, ticks, dashes, or underlines). Do NOT let the book bias what you see on the paper!\n"
+        "STEP 2 (Compare Second): Now look up 'correct_answer' in the reference book and compare it against 'student_answer'.\n"
+        "- For MCQ, ALWAYS write BOTH letter and full option text (e.g., 'c) Microsoft Windows') in student_answer and correct_answer.\n"
         "- For True/False, ALWAYS write 'True' or 'False' (never ✓/✗ or T/F).\n"
-        "- Always provide correct_answer and a short 1-sentence reason from the reference book.\n"
-        f"Total Marks: {total_marks} | Pages: {len(uploaded_files)} | Rubric: {distribution_rule}"
+        f"Total Marks: {total_marks} | Pages: {len(pages)} | Rubric: {distribution_rule}"
     )
 
-    image_parts = []
-    for f in uploaded_files:
-        opt_bytes = optimize_image_fast(f.getvalue())
-        image_parts.append(types.Part.from_bytes(data=opt_bytes, mime_type="image/jpeg"))
+    image_parts = [
+        types.Part.from_bytes(data=optimize_image_fast(img_bytes), mime_type="image/jpeg")
+        for img_bytes, _ in pages
+    ]
 
     last_error = None
     for model_name in MODELS_TO_TRY:
@@ -362,7 +563,7 @@ async def grade_paper_async(
                         contents=contents,
                         config=types.GenerateContentConfig(**config_kwargs),
                     ),
-                    timeout=30.0,
+                    timeout=35.0,
                 )
                 elapsed = round(time.perf_counter() - t0, 1)
                 status_tag = f"{model_name} ({'Cached' if (attempt_cached and cache_name) else 'Direct'})"
@@ -516,39 +717,36 @@ else:
 
     with st.container(border=True):
         st.markdown(f"**3️⃣ Snap or Attach Pages for ONE Student (Max {MAX_PAGES_PER_EXAM} pages):**")
-        uploaded_files = st.file_uploader(
-            "Tap 'Browse files' to Take Photo or Choose from Photo Library (select multiple pages at once):",
-            type=["png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=True,
-            key=f"fast_uploader_{st.session_state.uploader_key}",
+        pages_to_grade = render_mobile_multi_capture(
+            st.session_state.dark_mode,
+            st.session_state.uploader_key,
+            MAX_PAGES_PER_EXAM,
         )
 
-        if uploaded_files:
-            if len(uploaded_files) > MAX_PAGES_PER_EXAM:
-                st.warning(f"Only the first {MAX_PAGES_PER_EXAM} pages will be graded.")
-                uploaded_files = uploaded_files[:MAX_PAGES_PER_EXAM]
-
-            st.caption(f"✅ {len(uploaded_files)} page(s) attached and ready.")
+        if pages_to_grade:
+            st.session_state.my_last_result = None
+            st.session_state.last_meta = None
+            st.write("")
             if st.button(
-                f"✨ Grade This Student ({len(uploaded_files)} page(s))",
+                f"✨ Grade This Student ({len(pages_to_grade)} page(s))",
                 type="primary",
                 use_container_width=True,
                 disabled=(not api_key or st.session_state.is_grading),
             ):
                 st.session_state.is_grading = True
-                with st.spinner(f"Grading {len(uploaded_files)} page(s)..."):
+                with st.spinner(f"Grading 1 student ({len(pages_to_grade)} page(s))..."):
                     try:
                         result, status_tag, elapsed = asyncio.run(
                             grade_paper_async(
                                 api_key=api_key,
                                 book_text=book_data["compact_content"],
-                                uploaded_files=uploaded_files,
+                                pages=pages_to_grade,
                                 total_marks=EXAM_TYPES[exam_type],
                                 marks_distribution=shared["shared_marks_distribution"],
                             )
                         )
                         st.session_state.my_last_result = result
-                        st.session_state.last_meta = f"⚡ Graded 1 student ({len(uploaded_files)} pages) in {elapsed}s via {status_tag}"
+                        st.session_state.last_meta = f"⚡ Graded 1 student ({len(pages_to_grade)} pages) in {elapsed}s via {status_tag}"
                         st.session_state.uploader_key += 1
                         with shared["lock"]:
                             shared["total_graded_papers"] += 1
@@ -556,18 +754,19 @@ else:
                         st.error(f"Grading error: {e}")
                     finally:
                         st.session_state.is_grading = False
+                        pages_to_grade.clear()
                         gc.collect()
                 st.rerun()
 
     # Results Section
     if st.session_state.my_last_result:
         res = st.session_state.my_last_result
-        res_top1, res_top2 = st.columns([4, 1.4])
+        res_top1, res_top2 = st.columns([4, 1.5])
         with res_top1:
             if st.session_state.last_meta:
                 st.caption(st.session_state.last_meta)
         with res_top2:
-            if st.button("➡️ Next Student (Clear)", use_container_width=True):
+            if st.button("🧹 Clear & Next Student", type="primary", use_container_width=True):
                 st.session_state.my_last_result = None
                 st.session_state.last_meta = None
                 st.session_state.uploader_key += 1
