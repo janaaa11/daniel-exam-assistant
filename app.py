@@ -500,12 +500,13 @@ STRICT_SYSTEM_INSTRUCTION = (
     "CRITICAL VISUAL INSPECTION & MARK-DETECTION RULES (MANDATORY):\n"
     "1. DETECT ANY STUDENT MARK: Students often mark answers casually using ANY handwritten mark: a large circle, a tiny circle, a tick/check mark (✓), a small dash/line (-), a dot, an underline, shading, or a written letter/word. Treat ANY non-crossed-out handwritten mark on or next to an option as the student's chosen answer! Do NOT ignore small circles, dashes, or faint ticks.\n"
     "2. CROSSED-OUT ('X') OVERRIDE RULE: If a student marked an option and then crossed it out with an 'X' or scribbled over it, and marked ANOTHER option instead, IGNORE the crossed-out 'X' option completely and read the non-crossed-out marked option as the student's final answer.\n"
-    "3. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark/ink/pencil anywhere on or next to the question/options, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
-    "4. NO HALLUCINATION FROM BOOK: Never invent a student answer from the reference book when no mark exists on the paper.\n"
-    "5. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
-    "   - visual_mark_found: Describe the exact physical mark seen on the paper (e.g., 'Small circle around B (A is crossed out with X)' or 'Handwritten text: ...' or 'None').\n"
-    "   - student_answer: The exact option/text the student selected.\n"
-    "   - correct_answer: ALWAYS provide the exact correct answer/choice from the reference book (even when the student is correct).\n"
+    "3. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'. Even if the student drew a checkmark (✓) or cross (✗) or wrote T/F, convert it to the exact word 'True' or 'False'.\n"
+    "4. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark/ink/pencil anywhere on or next to the question/options, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
+    "5. NO HALLUCINATION FROM BOOK: Never invent a student answer from the reference book when no mark exists on the paper.\n"
+    "6. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
+    "   - visual_mark_found: Describe the exact physical mark seen on the paper (e.g., 'Small circle around B (A is crossed out with X)' or 'Checkmark representing True' or 'None').\n"
+    "   - student_answer: The exact option/text the student selected (must be 'True' or 'False' for True/False questions).\n"
+    "   - correct_answer: ALWAYS provide the exact correct answer/choice from the reference book (must be 'True' or 'False' for True/False questions, even when the student is correct).\n"
     "   - reason: ALWAYS provide a clear 1-2 sentence explanation based on the reference book justifying why the student's answer is correct, partially correct, or incorrect."
 )
 
@@ -519,7 +520,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_marks_v3_{model_name}",
+                display_name=f"book_cache_marks_v4_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -575,11 +576,12 @@ async def grade_paper_async(
         "Inspect every option and answer space carefully before grading:\n"
         "- Look closely for ANY handwritten mark: big circle, tiny circle, tick (✓), dash (-), dot, underline, shading, or written text. Any such mark counts as the student's chosen answer.\n"
         "- If an option has an 'X' or scribble crossing it out AND another option has a clean mark, ignore the 'X' option and use the clean marked option.\n"
+        "- For ALL True/False questions, ALWAYS output the exact word 'True' or 'False' in student_answer and correct_answer — NEVER use symbols like ✓, ✗, ✔, ✘, or T/F.\n"
         "- Only mark '[BLANK / NO ANSWER]' if there is truly no handwritten mark anywhere on that question.\n"
         "Respond completely in English. For EVERY question on the paper, ALWAYS populate all fields:\n"
         "1. visual_mark_found: Describe the exact mark visible on the paper.\n"
-        "2. student_answer: State the student's selected option/answer.\n"
-        "3. correct_answer: ALWAYS state the exact correct answer/choice from the reference book (both when Correct and Incorrect).\n"
+        "2. student_answer: State the student's selected option/answer ('True' or 'False' for True/False questions).\n"
+        "3. correct_answer: ALWAYS state the exact correct answer/choice from the reference book ('True' or 'False' for True/False questions, both when Correct and Incorrect).\n"
         "4. status: 'Correct', 'Partially Correct', or 'Incorrect'.\n"
         f"5. score_awarded & max_score: Assign scores summing to {total_marks}. {distribution_rule}\n"
         "6. reason: ALWAYS explain why the student's answer is right or wrong using the reference book.\n\n"
