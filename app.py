@@ -37,7 +37,7 @@ EXAM_TYPES = {
 
 class QuestionEvaluation(BaseModel):
     question_number: str
-    visual_mark_found: str
+    options_visual_audit: str
     student_answer: str
     correct_answer: str
     status: Literal["Correct", "Partially Correct", "Incorrect"]
@@ -500,21 +500,16 @@ def load_prepared_book() -> dict:
 
 STRICT_SYSTEM_INSTRUCTION = (
     "You are a precise, forensic academic exam grader. Grade student answers strictly against the reference book and respond completely in English.\n"
-    "CRITICAL VISUAL INSPECTION & MARK-DETECTION RULES (MANDATORY):\n"
-    "1. DISTINGUISH CANCELLATION ('X' / SCRIBBLE) FROM SELECTION MARKS:\n"
-    "   - An 'X', cross-out lines, or heavy scribbling over an option letter/text means the student REJECTED / CANCELLED that option! NEVER treat a crossed-out ('X' or scribbled) option as the student's chosen answer.\n"
-    "   - After seeing an 'X' or scribble on one option, you MUST inspect ALL remaining options (A, B, C, D) and the surrounding margins/spaces very carefully to find the student's actual replacement mark (which may be a small dash '-', tiny circle, dot, tick '✓', underline, or written letter).\n"
-    "   - If option B is crossed out with 'X' and option C has a small dash/circle/dot, the student's answer is C (NOT B!).\n"
-    "   - If an option is crossed out with 'X' and NO other option has any mark at all, set student_answer = '[CANCELLED / NO VALID SELECTION]' and score_awarded = 0.\n"
-    "2. DETECT ANY VALID SELECTION MARK & GRAPHITE PENCIL STROKES:\n"
-    "   - Any non-crossed-out handwritten mark on or next to an option — large circle, tiny circle, tick/check mark (✓), small dash/line (-), dot, underline, shading, or written letter — counts as the student's chosen answer.\n"
-    "   - PENCIL / GRAPHITE MARKS: Students frequently use thin grey graphite pencil. Look carefully for thin grey pencil strokes, circles, or ticks around the true chosen option, and do NOT confuse paper shadows, creases, or printed borders with a pencil circle.\n"
-    "3. INCLUDE FULL ANSWER TEXT WITH LETTER (MANDATORY): For ALL Multiple Choice (MCQ) questions, NEVER write just 'A' or 'B' alone! Always write BOTH the option letter AND its full printed text from the exam paper in both student_answer and correct_answer (e.g., 'B) Central Processing Unit' instead of just 'B').\n"
-    "4. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'.\n"
-    "5. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark anywhere on or next to ANY option, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
-    "6. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
-    "   - visual_mark_found: Report what is seen on EVERY marked/crossed option (e.g., 'B is crossed out with X (rejected); thin grey pencil circle around C (selected)').\n"
-    "   - student_answer: The selected option letter + full option text (or 'True'/'False').\n"
+    "CRITICAL VISUAL INSPECTION & OPTION-BY-OPTION AUDIT RULES (MANDATORY):\n"
+    "1. MANDATORY OPTION-BY-OPTION AUDIT FIRST: Before deciding student_answer, you MUST inspect EVERY single printed option (A, B, C, D) individually and record its exact physical state in 'options_visual_audit' (e.g., 'A: clean | B: crossed out with X | C: thin grey pencil circle | D: clean').\n"
+    "2. CANCELLATION ('X' / SCRIBBLE) RULE: An 'X', cross-out, or scribble over an option means it is CANCELLED/REJECTED. NEVER pick a crossed-out option! Look at the remaining clean options for the student's actual mark.\n"
+    "3. PENCIL & FAINT MARK DETECTION: Students frequently use thin grey graphite pencil. Look closely at the pixels around each option letter and text for thin grey pencil circles, ticks (✓), dashes (-), dots, or underlines. Do NOT mistake paper shadows, folds, or printed borders for a circle—verify the stroke actually encloses or marks a specific option.\n"
+    "4. INCLUDE FULL ANSWER TEXT WITH LETTER (MANDATORY): For ALL Multiple Choice (MCQ) questions, NEVER write just 'A' or 'B' alone! Always write BOTH the option letter AND its full printed text from the exam paper in both student_answer and correct_answer (e.g., 'B) Central Processing Unit' instead of just 'B').\n"
+    "5. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'.\n"
+    "6. TRULY BLANK ANSWERS: Only if ALL options in options_visual_audit are completely clean with zero handwritten marks, set student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
+    "7. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
+    "   - options_visual_audit: Individual visual status of every option (A, B, C, D) or answer space.\n"
+    "   - student_answer: Derived strictly from the non-crossed-out marked option in options_visual_audit (letter + full text, or 'True'/'False').\n"
     "   - correct_answer: ALWAYS provide the exact correct option letter + full option text (or 'True'/'False') from the reference book, even when the student is correct.\n"
     "   - reason: ALWAYS provide a clear 1-2 sentence explanation based on the reference book."
 )
@@ -529,7 +524,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_marks_v8_{model_name}",
+                display_name=f"book_cache_marks_v9_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -557,8 +552,8 @@ def optimize_image(img_bytes: bytes, max_dim: int = 1800) -> Tuple[bytes, str]:
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
     img = ImageOps.autocontrast(img, cutoff=1)
-    img = ImageEnhance.Contrast(img).enhance(1.22)
-    img = ImageEnhance.Sharpness(img).enhance(1.45)
+    img = ImageEnhance.Contrast(img).enhance(1.25)
+    img = ImageEnhance.Sharpness(img).enhance(1.60)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=90, optimize=True)
     return buf.getvalue(), "image/jpeg"
@@ -582,15 +577,14 @@ async def grade_paper_async(
 
     grading_instructions = (
         "All attached images (1 to 15 pages) belong to ONE SINGLE student's exam submission. "
-        "Inspect EVERY option (A, B, C, D) and answer space carefully before grading:\n"
-        "- CRITICAL: An 'X' or scribble over an option means that option is CANCELLED/REJECTED — NEVER select a crossed-out option as the student's answer! Keep looking at all other options (A, B, C, D) for any clean mark (thin grey pencil circle, small dash '-', dot, tick, underline, or letter) and choose that non-crossed-out option.\n"
-        "- PENCIL MARKS: Look closely for thin grey graphite pencil strokes/circles; do not mistake paper shadows or creases for pencil marks.\n"
-        "- CRITICAL FORMAT: For Multiple Choice questions, ALWAYS include BOTH the option letter AND the full text of the choice (e.g., 'C) Hard Disk Drive'), NEVER just 'C' alone.\n"
+        "Perform a strict forensic visual inspection of EVERY option (A, B, C, D) before grading:\n"
+        "- STEP 1 (options_visual_audit): Check A, B, C, D individually and write what is on each (e.g., 'A: clean | B: crossed out with X | C: thin grey pencil circle | D: clean').\n"
+        "- STEP 2 (student_answer): Pick ONLY the option that has a clean, non-crossed-out mark (pencil circle, dash, dot, tick, underline). NEVER pick an option marked with 'X' or scribbled out. Always include BOTH letter and full option text (e.g., 'C) Hard Disk Drive').\n"
         "- For ALL True/False questions, ALWAYS output the exact word 'True' or 'False' in student_answer and correct_answer — NEVER use symbols like ✓, ✗, ✔, ✘, or T/F.\n"
-        "- Only mark '[BLANK / NO ANSWER]' if there is truly no handwritten mark anywhere on that question.\n"
+        "- Only mark '[BLANK / NO ANSWER]' if ALL options are completely clean with zero handwritten marks.\n"
         "Respond completely in English. For EVERY question on the paper, ALWAYS populate all fields:\n"
-        "1. visual_mark_found: Describe every mark/cross-out seen across all options.\n"
-        "2. student_answer: State the student's selected non-crossed-out option letter + full answer text (or 'True'/'False').\n"
+        "1. options_visual_audit: Individual visual check of A, B, C, D.\n"
+        "2. student_answer: Selected non-crossed-out option letter + full answer text (or 'True'/'False').\n"
         "3. correct_answer: ALWAYS state the exact correct option letter + full answer text (or 'True'/'False') from the reference book, both when Correct and Incorrect.\n"
         "4. status: 'Correct', 'Partially Correct', or 'Incorrect'.\n"
         f"5. score_awarded & max_score: Assign scores summing to {total_marks}. {distribution_rule}\n"
@@ -864,7 +858,7 @@ else:
                 col1, col2 = st.columns([4.2, 1])
                 with col1:
                     st.markdown(f"**{icon} Question {q.question_number} — {q.status}**")
-                    st.caption(f"👁️ Detected Mark: {q.visual_mark_found}")
+                    st.caption(f"👁️ Audit: {q.options_visual_audit}")
                     st.write(f"**Student Answer:** {q.student_answer}")
                     st.write(f"**Correct Answer:** {q.correct_answer}")
                     st.info(f"**Grading Reason:** {q.reason}")
