@@ -24,7 +24,6 @@ st.set_page_config(page_title="Daniel's Exam Assistant", page_icon="🎓", layou
 BOOK_CONTEXT_PATH = "book_context.json"
 MAX_PAGES_PER_EXAM = 15
 
-# Official, fast, high-accuracy Gemini Vision models
 MODELS_TO_TRY = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
@@ -437,7 +436,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
         f.write(html_code)
 
     comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
-    payload = comp_func(key=f"multi_cap_v5_{reset_token}", default={"token": reset_token, "images": []})
+    payload = comp_func(key=f"multi_cap_v6_{reset_token}", default={"token": reset_token, "images": []})
 
     pages: List[Tuple[bytes, str]] = []
     if isinstance(payload, dict) and payload.get("token") == reset_token:
@@ -479,7 +478,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_noblank_v16_{model_name}",
+                display_name=f"book_cache_noblank_v17_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -539,7 +538,7 @@ async def grade_paper_async(
         for img_bytes, _ in pages
     ]
 
-    last_error = None
+    errors = []
     for model_name in MODELS_TO_TRY:
         cache_name = get_cached_book_name(api_key, model_name, book_text)
         attempts = [True, False] if cache_name else [False]
@@ -563,19 +562,20 @@ async def grade_paper_async(
                         contents=contents,
                         config=types.GenerateContentConfig(**config_kwargs),
                     ),
-                    timeout=35.0,
+                    timeout=45.0,
                 )
                 elapsed = round(time.perf_counter() - t0, 1)
                 status_tag = f"{model_name} ({'Cached' if (attempt_cached and cache_name) else 'Direct'})"
                 return PaperEvaluation.model_validate_json(response.text), status_tag, elapsed
             except Exception as e:
-                last_error = e
+                mode_str = "Cached" if (attempt_cached and cache_name) else "Direct"
+                errors.append(f"[{model_name} / {mode_str}]: {type(e).__name__}: {e}")
                 if attempt_cached:
                     get_cached_book_name.clear()
                     continue
                 break
 
-    raise last_error
+    raise RuntimeError(" | ".join(errors) if errors else "Unknown grading failure")
 
 
 # Initialize resources
@@ -587,6 +587,8 @@ if "my_last_result" not in st.session_state:
     st.session_state.my_last_result = None
 if "last_meta" not in st.session_state:
     st.session_state.last_meta = None
+if "last_error" not in st.session_state:
+    st.session_state.last_error = None
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 if "uploader_key" not in st.session_state:
@@ -614,6 +616,16 @@ with header_col2:
     if st.button(theme_label, use_container_width=True):
         st.session_state.dark_mode = not st.session_state.dark_mode
         st.rerun()
+
+# Persistent Error Box (stays visible until cleared or next successful grading)
+if st.session_state.last_error:
+    err_c1, err_c2 = st.columns([5, 1])
+    with err_c1:
+        st.error(f"**Grading Error Details:** {st.session_state.last_error}")
+    with err_c2:
+        if st.button("✖ Dismiss", key="dismiss_err", use_container_width=True):
+            st.session_state.last_error = None
+            st.rerun()
 
 # Always-Visible Session & Counter Bar
 with st.container(border=True):
@@ -643,6 +655,7 @@ with st.container(border=True):
                     shared["shared_marks_distribution"] = ""
                 st.session_state.my_last_result = None
                 st.session_state.last_meta = None
+                st.session_state.last_error = None
                 st.session_state.uploader_key += 1
                 gc.collect()
                 st.rerun()
@@ -673,6 +686,7 @@ with st.sidebar:
                 shared["shared_marks_distribution"] = ""
             st.session_state.my_last_result = None
             st.session_state.last_meta = None
+            st.session_state.last_error = None
             st.session_state.uploader_key += 1
             gc.collect()
             st.rerun()
@@ -691,6 +705,7 @@ if shared["session_finished"]:
             shared["shared_marks_distribution"] = ""
         st.session_state.my_last_result = None
         st.session_state.last_meta = None
+        st.session_state.last_error = None
         st.session_state.uploader_key += 1
         gc.collect()
         st.rerun()
@@ -734,6 +749,7 @@ else:
                 disabled=(not api_key or st.session_state.is_grading),
             ):
                 st.session_state.is_grading = True
+                st.session_state.last_error = None
                 with st.spinner(f"Grading 1 student ({len(pages_to_grade)} page(s))..."):
                     try:
                         result, status_tag, elapsed = asyncio.run(
@@ -751,7 +767,7 @@ else:
                         with shared["lock"]:
                             shared["total_graded_papers"] += 1
                     except Exception as e:
-                        st.error(f"Grading error: {e}")
+                        st.session_state.last_error = str(e)
                     finally:
                         st.session_state.is_grading = False
                         pages_to_grade.clear()
@@ -769,6 +785,7 @@ else:
             if st.button("🧹 Clear & Next Student", type="primary", use_container_width=True):
                 st.session_state.my_last_result = None
                 st.session_state.last_meta = None
+                st.session_state.last_error = None
                 st.session_state.uploader_key += 1
                 gc.collect()
                 st.rerun()
