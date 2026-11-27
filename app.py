@@ -14,7 +14,7 @@ import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image, ImageOps
 from pydantic import BaseModel
 
 load_dotenv(override=True)
@@ -35,9 +35,10 @@ EXAM_TYPES = {
 }
 
 
-# Step 1 (Visual reading FIRST) -> Step 2 (Book comparison SECOND)
+# Spatial Anchor (question_snippet) locks the model onto ONE question block at a time
 class QuestionEvaluation(BaseModel):
     question_number: str
+    question_snippet: str
     visual_mark_found: str
     student_answer: str
     correct_answer: str
@@ -340,7 +341,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                     reader.onload = (e) => {{
                         const img = new Image();
                         img.onload = () => {{
-                            const maxDim = 1150;
+                            const maxDim = 1350;
                             let w = img.width;
                             let h = img.height;
                             if (Math.max(w, h) > maxDim) {{
@@ -352,7 +353,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                             canvas.height = h;
                             const ctx = canvas.getContext("2d");
                             ctx.drawImage(img, 0, 0, w, h);
-                            resolve(canvas.toDataURL("image/jpeg", 0.80));
+                            resolve(canvas.toDataURL("image/jpeg", 0.85));
                         }};
                         img.src = e.target.result;
                     }};
@@ -435,7 +436,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
         f.write(html_code)
 
     comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
-    payload = comp_func(key=f"multi_cap_v3_{reset_token}", default={"token": reset_token, "images": []})
+    payload = comp_func(key=f"multi_cap_v4_{reset_token}", default={"token": reset_token, "images": []})
 
     pages: List[Tuple[bytes, str]] = []
     if isinstance(payload, dict) and payload.get("token") == reset_token:
@@ -456,15 +457,13 @@ def load_prepared_book() -> dict:
 
 
 STRICT_SYSTEM_INSTRUCTION = (
-    "You are a precise academic exam grader. Follow this strict 2-PHASE PROCESS for every question and respond in English:\n"
-    "PHASE 1 — BLIND VISUAL EXTRACTION (LOOK ONLY AT THE IMAGE FIRST, IGNORE THE REFERENCE BOOK):\n"
-    "1. First, transcribe ONLY what the student physically marked on the exam paper without guessing what the right answer should be.\n"
-    "2. An 'X' or scribble over an option means CANCELLED/REJECTED — never select it. Look at the other options for a clean circle (pen or pencil), tick (✓), dash (-), dot, or underline.\n"
-    "3. visual_mark_found: State the exact handwritten mark seen on the paper (e.g., 'Pencil circle around (c); (d) crossed out with X').\n"
-    "4. student_answer: Record ONLY what the student actually marked (BOTH option letter + full printed text for MCQ, e.g., 'c) Microsoft Windows'; or 'True'/'False' for True/False; or '[BLANK / NO ANSWER]' if zero marks exist).\n"
-    "PHASE 2 — BOOK COMPARISON & GRADING (AFTER RECORDING student_answer):\n"
-    "5. Now consult the reference book to determine correct_answer (BOTH option letter + full text for MCQ, or 'True'/'False').\n"
-    "6. Compare student_answer with correct_answer to assign status ('Correct', 'Partially Correct', 'Incorrect'), score_awarded, max_score, and a 1-sentence reason from the book."
+    "You are an expert academic exam grader. Read the exam paper naturally like a human teacher, keeping each question and its own options strictly separated so choices from one question NEVER bleed into another question.\n"
+    "FOLLOW THIS EXACT ORDER FOR EACH QUESTION (IN ENGLISH):\n"
+    "1. question_snippet: Transcribe the first 5-8 words of THIS specific question to lock onto its exact lines on the page.\n"
+    "2. visual_mark_found: Look ONLY within THIS question's options/answer space and report the exact handwritten mark seen (e.g., 'Pencil circle around (c); (d) crossed out with X'). Never pull marks from adjacent questions above or below.\n"
+    "3. student_answer: Based ONLY on visual_mark_found (ignoring 'X' cross-outs; picking clean circles, ticks, dashes, dots, or underlines), write the student's answer — BOTH option letter and full printed text for MCQ (e.g., 'c) Microsoft Windows'), 'True'/'False' for True/False, or '[BLANK / NO ANSWER]' if unmarked.\n"
+    "4. correct_answer: Now look up the exact answer in the reference book (BOTH letter + full text for MCQ, or 'True'/'False').\n"
+    "5. status, score_awarded, max_score, and a 1-sentence reason from the reference book."
 )
 
 
@@ -477,7 +476,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_blind_v14_{model_name}",
+                display_name=f"book_cache_anchor_v15_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -499,13 +498,12 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image_fast(img_bytes: bytes) -> bytes:
-    """Fast light contrast enhancement without heavy resizing lag."""
+def prepare_clean_image(img_bytes: bytes) -> bytes:
+    """Keep the natural camera image untouched (no artificial contrast filters that distort pencil marks)."""
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
-    img = ImageEnhance.Contrast(img).enhance(1.18)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=82)
+    img.save(buf, format="JPEG", quality=85)
     return buf.getvalue()
 
 
@@ -526,16 +524,18 @@ async def grade_paper_async(
     )
 
     grading_instructions = (
-        "All attached images belong to ONE SINGLE student's exam submission.\n"
-        "STEP 1 (Visual First): Look strictly at the image first to fill 'visual_mark_found' and 'student_answer' based ONLY on what the student marked (ignore 'X' cross-outs; pick clean pen/pencil circles, ticks, dashes, or underlines). Do NOT let the book bias what you see on the paper!\n"
-        "STEP 2 (Compare Second): Now look up 'correct_answer' in the reference book and compare it against 'student_answer'.\n"
-        "- For MCQ, ALWAYS write BOTH letter and full option text (e.g., 'c) Microsoft Windows') in student_answer and correct_answer.\n"
+        "All attached images belong to ONE SINGLE student's exam submission. "
+        "Keep each question strictly separated from the questions above/below it:\n"
+        "1. Write 'question_snippet' (first few words of the question) first so you stay anchored on that exact question.\n"
+        "2. Inspect ONLY that question's options to write 'visual_mark_found' and 'student_answer' (ignore 'X' cross-outs; pick clean pen/pencil circles, ticks, dashes, or underlines).\n"
+        "3. Then check the reference book for 'correct_answer' and grade it.\n"
+        "- For MCQ, ALWAYS include BOTH letter and full option text (e.g., 'c) Microsoft Windows') in student_answer and correct_answer.\n"
         "- For True/False, ALWAYS write 'True' or 'False' (never ✓/✗ or T/F).\n"
         f"Total Marks: {total_marks} | Pages: {len(pages)} | Rubric: {distribution_rule}"
     )
 
     image_parts = [
-        types.Part.from_bytes(data=optimize_image_fast(img_bytes), mime_type="image/jpeg")
+        types.Part.from_bytes(data=prepare_clean_image(img_bytes), mime_type="image/jpeg")
         for img_bytes, _ in pages
     ]
 
@@ -799,7 +799,7 @@ else:
                 col1, col2 = st.columns([4.2, 1])
                 with col1:
                     st.markdown(f"**{icon} Question {q.question_number} — {q.status}**")
-                    st.caption(f"👁️ Detected Mark: {q.visual_mark_found}")
+                    st.caption(f"📝 {q.question_snippet}...  |  👁️ Detected Mark: {q.visual_mark_found}")
                     st.write(f"**Student Answer:** {q.student_answer}")
                     st.write(f"**Correct Answer:** {q.correct_answer}")
                     st.info(f"**Grading Reason:** {q.reason}")
