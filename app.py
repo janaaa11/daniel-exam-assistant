@@ -289,7 +289,7 @@ def apply_theme(dark_mode: bool) -> None:
     )
 
 
-def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tuple[bytes, str]]:
+def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: int = 15) -> List[Tuple[bytes, str]]:
     card = "#18181B" if dark_mode else "#F4F4F5"
     border = "#27272A" if dark_mode else "#E4E4E7"
     text = "#FAFAFA" if dark_mode else "#09090B"
@@ -297,6 +297,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
     btn_bg = "#FFFFFF" if dark_mode else "#09090B"
     btn_fg = "#09090B" if dark_mode else "#FFFFFF"
 
+    # Notice: reset_token is embedded inside the HTML so every new student forces a brand-new clean JS instance
     html_code = f"""
     <!DOCTYPE html>
     <html>
@@ -334,7 +335,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
         }}
     </style>
     </head>
-    <body>
+    <body data-session="{reset_token}">
         <input type="file" id="camInput" accept="image/*" capture="environment" style="display:none" />
         <input type="file" id="galInput" accept="image/*" multiple style="display:none" />
 
@@ -348,7 +349,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
         </div>
 
         <div class="status">
-            <span id="statusText">No pages attached yet. Tap "Snap Page" repeatedly for multi-page exams.</span>
+            <span id="statusText">Ready for next student. Tap "Snap Page" or "Choose from Gallery".</span>
             <span id="clearBtn" class="clear-link" style="display:none" onclick="clearAll()">Clear all</span>
         </div>
 
@@ -356,13 +357,14 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
 
         <script>
             const MAX_PAGES = {max_pages};
+            const SESSION_TOKEN = {reset_token};
             let images = [];
 
             function sendToStreamlit() {{
                 window.parent.postMessage({{
                     isStreamlitMessage: true,
                     type: "streamlit:setComponentValue",
-                    value: images
+                    value: {{ token: SESSION_TOKEN, images: images }}
                 }}, "*");
                 updateHeight();
             }}
@@ -432,7 +434,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
                 const clearBtn = document.getElementById("clearBtn");
                 grid.innerHTML = "";
                 if (images.length === 0) {{
-                    status.innerText = 'No pages attached yet. Tap "Snap Page" repeatedly for multi-page exams.';
+                    status.innerText = 'Ready for next student. Tap "Snap Page" or "Choose from Gallery".';
                     clearBtn.style.display = "none";
                 }} else {{
                     status.innerText = `✅ ${{images.length}} page(s) ready — tap "Snap Page" again to add more.`;
@@ -464,7 +466,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
                 type: "streamlit:componentReady",
                 apiVersion: 1
             }}, "*");
-            updateHeight();
+            sendToStreamlit();
         </script>
     </body>
     </html>
@@ -473,21 +475,16 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
     comp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mobile_cam_comp")
     os.makedirs(comp_dir, exist_ok=True)
     index_path = os.path.join(comp_dir, "index.html")
-    if not os.path.exists(index_path):
-        with open(index_path, "w", encoding="utf-8") as f:
-            f.write(html_code)
-    else:
-        with open(index_path, "r", encoding="utf-8") as f:
-            existing_html = f.read()
-        if existing_html != html_code:
-            with open(index_path, "w", encoding="utf-8") as fw:
-                fw.write(html_code)
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html_code)
 
     comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
-    raw_list = comp_func(key=f"multi_cap_{st.session_state.uploader_key}", default=[])
+    payload = comp_func(key=f"multi_cap_v2_{reset_token}", default={"token": reset_token, "images": []})
 
     pages: List[Tuple[bytes, str]] = []
-    if raw_list:
+    # Only accept images that strictly belong to the current reset_token!
+    if isinstance(payload, dict) and payload.get("token") == reset_token:
+        raw_list = payload.get("images", [])
         for data_url in raw_list:
             if isinstance(data_url, str) and "," in data_url:
                 _, b64_data = data_url.split(",", 1)
@@ -511,7 +508,7 @@ STRICT_SYSTEM_INSTRUCTION = (
     "   - After seeing an 'X' or scribble on one option, you MUST inspect ALL remaining options (A, B, C, D) and the surrounding margins/spaces very carefully to find the student's actual replacement mark (which may be a small dash '-', tiny circle, dot, tick '✓', underline, or written letter).\n"
     "   - If option B is crossed out with 'X' and option C has a small dash/circle/dot, the student's answer is C (NOT B!).\n"
     "   - If an option is crossed out with 'X' and NO other option has any mark at all, set student_answer = '[CANCELLED / NO VALID SELECTION]' and score_awarded = 0.\n"
-    "2. DETECT ANY VALID SELECTION MARK: Any non-crossed-out handwritten mark on or next to an option — large circle, tiny circle, tick/check mark (✓), small dash/line (-), dot, underline, or written letter — counts as the student's chosen answer.\n"
+    "2. DETECT ANY VALID SELECTION MARK: Any non-crossed-out handwritten mark on or next to an option — large circle, tiny circle, tick/check mark (✓), small dash/line (-), dot, underline, shading, or written letter — counts as the student's chosen answer.\n"
     "3. INCLUDE FULL ANSWER TEXT WITH LETTER (MANDATORY): For ALL Multiple Choice (MCQ) questions, NEVER write just 'A' or 'B' alone! Always write BOTH the option letter AND its full printed text from the exam paper in both student_answer and correct_answer (e.g., 'B) Central Processing Unit' instead of just 'B').\n"
     "4. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'.\n"
     "5. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark anywhere on or next to ANY option, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
@@ -656,7 +653,7 @@ if "last_meta" not in st.session_state:
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
+    st.session_state.uploader_key = 1
 if "is_grading" not in st.session_state:
     st.session_state.is_grading = False
 
@@ -783,9 +780,16 @@ else:
 
     with st.container(border=True):
         st.markdown(f"**3️⃣ Snap or Attach Pages for ONE Student (Max {MAX_PAGES_PER_EXAM} pages):**")
-        pages_to_grade = render_mobile_multi_capture(st.session_state.dark_mode, MAX_PAGES_PER_EXAM)
+        pages_to_grade = render_mobile_multi_capture(
+            st.session_state.dark_mode,
+            st.session_state.uploader_key,
+            MAX_PAGES_PER_EXAM,
+        )
 
         if pages_to_grade:
+            # Clear previous student's displayed result as soon as new pages are attached
+            st.session_state.my_last_result = None
+            st.session_state.last_meta = None
             st.write("")
             if st.button(
                 f"✨ Grade This Student ({len(pages_to_grade)} page(s))",
@@ -821,8 +825,17 @@ else:
     # Results Section
     if st.session_state.my_last_result:
         res = st.session_state.my_last_result
-        if st.session_state.last_meta:
-            st.caption(st.session_state.last_meta)
+        res_top1, res_top2 = st.columns([4, 1.4])
+        with res_top1:
+            if st.session_state.last_meta:
+                st.caption(st.session_state.last_meta)
+        with res_top2:
+            if st.button("➡️ Next Student (Clear)", use_container_width=True):
+                st.session_state.my_last_result = None
+                st.session_state.last_meta = None
+                st.session_state.uploader_key += 1
+                gc.collect()
+                st.rerun()
 
         badge_bg = "#FFFFFF" if st.session_state.dark_mode else "#09090B"
         badge_text = "#09090B" if st.session_state.dark_mode else "#FFFFFF"
