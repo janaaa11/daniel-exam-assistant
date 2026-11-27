@@ -3,11 +3,13 @@ import os
 import re
 import time
 import json
+import base64
 import asyncio
 import threading
 from typing import List, Literal, Optional, Tuple
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -238,7 +240,7 @@ def apply_theme(dark_mode: bool) -> None:
             transform: translateY(-1px);
         }}
 
-        /* Text Inputs & File Uploader */
+        /* Text Inputs */
         .stTextInput input {{
             background-color: {input_bg} !important;
             color: {text_color} !important;
@@ -249,17 +251,6 @@ def apply_theme(dark_mode: bool) -> None:
         .stTextInput input:focus {{
             border-color: {accent_color} !important;
             box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.25) !important;
-        }}
-
-        [data-testid="stFileUploaderDropzone"] {{
-            background-color: {card_bg} !important;
-            border: 1.5px dashed {subtext_color} !important;
-            border-radius: 12px !important;
-            padding: 1.15rem !important;
-        }}
-        [data-testid="stFileUploaderDropzone"]:hover {{
-            border-color: {accent_color} !important;
-            background-color: {secondary_btn_bg} !important;
         }}
 
         /* Metric Styling */
@@ -294,6 +285,211 @@ def apply_theme(dark_mode: bool) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tuple[bytes, str]]:
+    """
+    Renders a native mobile camera + gallery multi-photo queue with instant client-side compression.
+    Works like an AI chat attachment bar: snap multiple photos consecutively without page reloads.
+    """
+    bg = "#141417" if dark_mode else "#FFFFFF"
+    card = "#18181B" if dark_mode else "#F4F4F5"
+    border = "#27272A" if dark_mode else "#E4E4E7"
+    text = "#FAFAFA" if dark_mode else "#09090B"
+    subtext = "#A1A1AA" if dark_mode else "#52525B"
+    btn_bg = "#FFFFFF" if dark_mode else "#09090B"
+    btn_fg = "#09090B" if dark_mode else "#FFFFFF"
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {{ box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+        body {{ margin: 0; padding: 4px; background: transparent; color: {text}; }}
+        .btn-row {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }}
+        .cap-btn {{
+            flex: 1; min-width: 145px; padding: 12px 14px; border-radius: 10px;
+            font-weight: 700; font-size: 14px; cursor: pointer; text-align: center;
+            border: 1.5px solid {btn_bg}; transition: opacity 0.15s; user-select: none;
+        }}
+        .cap-btn.primary {{ background: {btn_bg}; color: {btn_fg}; }}
+        .cap-btn.secondary {{ background: {card}; color: {text}; border-color: {border}; }}
+        .cap-btn:active {{ opacity: 0.75; }}
+        .status {{ font-size: 13px; color: {subtext}; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }}
+        .clear-link {{ color: #EF4444; cursor: pointer; font-weight: 600; text-decoration: underline; }}
+        .grid {{ display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }}
+        .thumb {{
+            position: relative; width: 82px; height: 104px; flex-shrink: 0;
+            border-radius: 10px; overflow: hidden; border: 1.5px solid {border}; background: {card};
+        }}
+        .thumb img {{ width: 100%; height: 100%; object-fit: cover; }}
+        .thumb .badge {{
+            position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,0.75);
+            color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 6px; font-weight: 700;
+        }}
+        .thumb .del {{
+            position: absolute; top: 4px; right: 4px; width: 22px; height: 22px;
+            border-radius: 50%; background: rgba(220,38,38,0.9); color: #fff;
+            border: none; font-size: 13px; font-weight: bold; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }}
+    </style>
+    </head>
+    <body>
+        <input type="file" id="camInput" accept="image/*" capture="environment" style="display:none" />
+        <input type="file" id="galInput" accept="image/*" multiple style="display:none" />
+
+        <div class="btn-row">
+            <div class="cap-btn primary" onclick="document.getElementById('camInput').click()">
+                📸 Snap Page (Camera)
+            </div>
+            <div class="cap-btn secondary" onclick="document.getElementById('galInput').click()">
+                🖼️ Choose from Gallery
+            </div>
+        </div>
+
+        <div class="status">
+            <span id="statusText">No pages attached yet. Tap "Snap Page" repeatedly for multi-page exams.</span>
+            <span id="clearBtn" class="clear-link" style="display:none" onclick="clearAll()">Clear all</span>
+        </div>
+
+        <div class="grid" id="thumbGrid"></div>
+
+        <script>
+            const MAX_PAGES = {max_pages};
+            let images = [];
+
+            function sendToStreamlit() {{
+                window.parent.postMessage({{
+                    isStreamlitMessage: true,
+                    type: "streamlit:setComponentValue",
+                    value: images
+                }}, "*");
+                updateHeight();
+            }}
+
+            function updateHeight() {{
+                const h = images.length > 0 ? 205 : 95;
+                window.parent.postMessage({{
+                    isStreamlitMessage: true,
+                    type: "streamlit:setFrameHeight",
+                    height: h
+                }}, "*");
+            }}
+
+            function compressImage(file) {{
+                return new Promise((resolve) => {{
+                    const reader = new FileReader();
+                    reader.onload = (e) => {{
+                        const img = new Image();
+                        img.onload = () => {{
+                            const maxDim = 1350;
+                            let w = img.width;
+                            let h = img.height;
+                            if (Math.max(w, h) > maxDim) {{
+                                if (w > h) {{ h = Math.round(h * maxDim / w); w = maxDim; }}
+                                else {{ w = Math.round(w * maxDim / h); h = maxDim; }}
+                            }}
+                            const canvas = document.createElement("canvas");
+                            canvas.width = w;
+                            canvas.height = h;
+                            const ctx = canvas.getContext("2d");
+                            ctx.drawImage(img, 0, 0, w, h);
+                            resolve(canvas.toDataURL("image/jpeg", 0.82));
+                        }};
+                        img.src = e.target.result;
+                    }};
+                    reader.readAsDataURL(file);
+                }});
+            }}
+
+            async function handleFiles(fileList) {{
+                if (!fileList || fileList.length === 0) return;
+                document.getElementById("statusText").innerText = "⏳ Optimizing photo(s)...";
+                for (let i = 0; i < fileList.length; i++) {{
+                    if (images.length >= MAX_PAGES) break;
+                    const dataUrl = await compressImage(fileList[i]);
+                    images.push(dataUrl);
+                }}
+                render();
+                sendToStreamlit();
+            }}
+
+            function removeAt(idx) {{
+                images.splice(idx, 1);
+                render();
+                sendToStreamlit();
+            }}
+
+            function clearAll() {{
+                images = [];
+                render();
+                sendToStreamlit();
+            }}
+
+            function render() {{
+                const grid = document.getElementById("thumbGrid");
+                const status = document.getElementById("statusText");
+                const clearBtn = document.getElementById("clearBtn");
+                grid.innerHTML = "";
+                if (images.length === 0) {{
+                    status.innerText = 'No pages attached yet. Tap "Snap Page" repeatedly for multi-page exams.';
+                    clearBtn.style.display = "none";
+                }} else {{
+                    status.innerText = `✅ ${{images.length}} page(s) ready — tap "Snap Page" again to add more.`;
+                    clearBtn.style.display = "inline";
+                }}
+                images.forEach((src, idx) => {{
+                    const div = document.createElement("div");
+                    div.className = "thumb";
+                    div.innerHTML = `
+                        <img src="${{src}}" />
+                        <span class="badge">P${{idx + 1}}</span>
+                        <button class="del" onclick="removeAt(${{idx}})">×</button>
+                    `;
+                    grid.appendChild(div);
+                }});
+            }}
+
+            document.getElementById("camInput").addEventListener("change", (e) => {{
+                handleFiles(e.target.files);
+                e.target.value = "";
+            }});
+            document.getElementById("galInput").addEventListener("change", (e) => {{
+                handleFiles(e.target.files);
+                e.target.value = "";
+            }});
+
+            window.parent.postMessage({{
+                isStreamlitMessage: true,
+                type: "streamlit:componentReady",
+                apiVersion: 1
+            }}, "*");
+            updateHeight();
+        </script>
+    </body>
+    </html>
+    """
+
+    # Register an inline custom component via temporary directory once per session
+    comp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mobile_cam_comp")
+    os.makedirs(comp_dir, exist_ok=True)
+    index_path = os.path.join(comp_dir, "index.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html_code)
+
+    comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
+    raw_list = comp_func(key=f"multi_cap_{st.session_state.uploader_key}", default=[])
+
+    pages: List[Tuple[bytes, str]] = []
+    if raw_list:
+        for data_url in raw_list:
+            if isinstance(data_url, str) and "," in data_url:
+                _, b64_data = data_url.split(",", 1)
+                pages.append((base64.b64decode(b64_data), "image/jpeg"))
+    return pages
 
 
 @st.cache_resource
@@ -349,7 +545,7 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image(img_bytes: bytes, max_dim: int = 1400) -> Tuple[bytes, str]:
+def optimize_image(img_bytes: bytes, max_dim: int = 1350) -> Tuple[bytes, str]:
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
     if max(img.size) > max_dim:
@@ -444,10 +640,6 @@ if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
-if "camera_key" not in st.session_state:
-    st.session_state.camera_key = 0
-if "captured_pages" not in st.session_state:
-    st.session_state.captured_pages = []
 if "is_grading" not in st.session_state:
     st.session_state.is_grading = False
 
@@ -500,7 +692,6 @@ with st.container(border=True):
                     shared["shared_marks_distribution"] = ""
                 st.session_state.my_last_result = None
                 st.session_state.last_meta = None
-                st.session_state.captured_pages = []
                 st.session_state.uploader_key += 1
                 st.rerun()
 
@@ -530,7 +721,6 @@ with st.sidebar:
                 shared["shared_marks_distribution"] = ""
             st.session_state.my_last_result = None
             st.session_state.last_meta = None
-            st.session_state.captured_pages = []
             st.session_state.uploader_key += 1
             st.rerun()
 
@@ -548,7 +738,6 @@ if shared["session_finished"]:
             shared["shared_marks_distribution"] = ""
         st.session_state.my_last_result = None
         st.session_state.last_meta = None
-        st.session_state.captured_pages = []
         st.session_state.uploader_key += 1
         st.rerun()
 else:
@@ -573,54 +762,8 @@ else:
                     shared["shared_marks_distribution"] = marks_distribution
 
     with st.container(border=True):
-        st.markdown(f"**3️⃣ Add Exam Pages for ONE Student (Max {MAX_PAGES_PER_EXAM} pages per student):**")
-
-        input_mode = st.radio(
-            "Choose input method:",
-            ["📁 Upload from Gallery / Files (Recommended)", "📸 Live In-App Camera (Multi-Page)"],
-            horizontal=True,
-        )
-
-        pages_to_grade: List[Tuple[bytes, str]] = []
-
-        if input_mode == "📁 Upload from Gallery / Files (Recommended)":
-            uploaded_files = st.file_uploader(
-                f"Select ALL pages belonging to ONE student (1 to {MAX_PAGES_PER_EXAM} pages)",
-                type=["png", "jpg", "jpeg", "webp"],
-                accept_multiple_files=True,
-                key=f"uploader_{st.session_state.uploader_key}",
-            )
-            if uploaded_files:
-                if len(uploaded_files) > MAX_PAGES_PER_EXAM:
-                    st.error(f"Too many pages selected ({len(uploaded_files)}). Please select up to {MAX_PAGES_PER_EXAM} pages only.")
-                else:
-                    pages_to_grade = [(f.getvalue(), f.type) for f in uploaded_files]
-                    st.info(f"📑 Ready to grade **1 Student** ({len(pages_to_grade)} page(s) attached)")
-        else:
-            st.caption("Take a photo of each page and click 'Add Page' — works reliably on Android & iPhone without page reloads.")
-            cam_photo = st.camera_input(
-                "Capture student page",
-                key=f"cam_{st.session_state.camera_key}",
-            )
-            cam_col1, cam_col2 = st.columns([1, 1])
-            with cam_col1:
-                if cam_photo is not None:
-                    if len(st.session_state.captured_pages) >= MAX_PAGES_PER_EXAM:
-                        st.error(f"Maximum {MAX_PAGES_PER_EXAM} pages reached.")
-                    elif st.button("➕ Add Captured Page", use_container_width=True):
-                        st.session_state.captured_pages.append((cam_photo.getvalue(), "image/jpeg"))
-                        st.session_state.camera_key += 1
-                        st.rerun()
-            with cam_col2:
-                if st.session_state.captured_pages:
-                    if st.button("🗑️ Clear Captured Pages", use_container_width=True):
-                        st.session_state.captured_pages = []
-                        st.session_state.camera_key += 1
-                        st.rerun()
-
-            if st.session_state.captured_pages:
-                pages_to_grade = st.session_state.captured_pages
-                st.info(f"📑 Ready to grade **1 Student** ({len(pages_to_grade)} captured page(s))")
+        st.markdown(f"**3️⃣ Snap or Attach Pages for ONE Student (Max {MAX_PAGES_PER_EXAM} pages):**")
+        pages_to_grade = render_mobile_multi_capture(st.session_state.dark_mode, MAX_PAGES_PER_EXAM)
 
         if pages_to_grade:
             st.write("")
@@ -645,8 +788,6 @@ else:
                         st.session_state.my_last_result = result
                         st.session_state.last_meta = f"⚡ Graded 1 student ({len(pages_to_grade)} pages) in {elapsed}s via {status_tag}"
                         st.session_state.uploader_key += 1
-                        st.session_state.captured_pages = []
-                        st.session_state.camera_key += 1
                         with shared["lock"]:
                             shared["total_graded_papers"] += 1
                     except Exception as e:
