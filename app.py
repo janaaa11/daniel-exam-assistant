@@ -51,8 +51,9 @@ class ExtractedAnswer(BaseModel):
     question_snippet: str
     question_type: Literal["mcq", "true_false", "essay"]
     max_score_on_paper: float  # marks printed next to the question, 0 if not shown
-    has_handwriting: bool
+    # Field order matters: the model first DESCRIBES what it sees, then decides.
     visual_mark_found: str
+    has_handwriting: bool
     student_answer: str
     confidence: Literal["high", "medium", "low"]
 
@@ -516,10 +517,15 @@ EXTRACT_SYSTEM_INSTRUCTION = (
     "RULES:\n"
     "- List ONLY questions that are actually visible on the pages. Never invent questions or answers.\n"
     "- Printed parentheses around option letters like '(a)', '(b)', '(c)', '(d)' are PRINTED TEXT, not student marks.\n"
-    "- A student mark is something drawn by hand: a pen/pencil circle, tick, underline, dash, or handwritten text.\n"
+    "- A student mark is anything added by hand on top of the printed paper: a pen/pencil circle, tick, check mark, underline, dash, "
+    "highlight, cross, filled bubble, or handwritten text. Marks can be faint, thin, pencil-light, or in blue/black/red ink. "
+    "Look carefully at EVERY question before deciding it is blank.\n"
     "- Options crossed out with 'X' are rejected by the student; the chosen option is the one with a clean circle/tick/underline.\n"
-    "- has_handwriting=false if there is no real handwritten mark for that question. Then visual_mark_found='None (blank)' "
+    "- First describe in visual_mark_found exactly what handwritten marks you see next to this question. Then set has_handwriting.\n"
+    "- has_handwriting=true if you see ANY hand-made mark for that question, even a faint one (then use confidence 'medium' or 'low' if unsure). "
+    "Only set has_handwriting=false when you looked and the question is clearly untouched. Then visual_mark_found='None (blank)' "
     "and student_answer='[BLANK / NO ANSWER]'.\n"
+    "- If you are unsure whether a mark exists, report your best reading with confidence='low' instead of marking it blank.\n"
     "- For MCQ, student_answer = option letter + full printed option text (e.g. 'c) Microsoft Windows').\n"
     "- For True/False, student_answer = 'True' or 'False' (never a symbol or T/F).\n"
     "- For essay questions, student_answer = a faithful transcription of the handwriting. Write [unclear] for words you cannot read. Never complete or correct the student's text.\n"
@@ -611,6 +617,7 @@ async def extract_answers_async(
         contents.append(f"Page {i}:")
         contents.append(types.Part.from_bytes(data=prepare_clean_image(img_bytes), mime_type="image/jpeg"))
 
+    all_blank_candidate: Optional[Tuple[ExtractionResult, str]] = None
     for model_name in MODELS_TO_TRY:
         try:
             response = await asyncio.wait_for(
@@ -630,9 +637,18 @@ async def extract_answers_async(
             if not result.answers:
                 errors.append(f"[extract / {model_name}]: no questions detected")
                 continue
+            # If the model says EVERY question is blank, it probably failed to see the marks:
+            # try the next model before accepting that.
+            if not any(a.has_handwriting for a in result.answers):
+                errors.append(f"[extract / {model_name}]: all questions read as blank")
+                if all_blank_candidate is None:
+                    all_blank_candidate = (result, model_name)
+                continue
             return result, model_name
         except Exception as e:
             errors.append(f"[extract / {model_name}]: {type(e).__name__}: {e}")
+    if all_blank_candidate is not None:
+        return all_blank_candidate
     raise RuntimeError(" | ".join(errors))
 
 
