@@ -24,15 +24,55 @@ st.set_page_config(page_title="Daniel's Exam Assistant", page_icon="🎓", layou
 BOOK_CONTEXT_PATH = "book_context.json"
 MAX_PAGES_PER_EXAM = 15
 
+# Image resolution sent to the model (higher = faint pencil marks survive)
+IMAGE_MAX_DIM = 2000
+IMAGE_JPEG_QUALITY = 90
+
+# Stronger model first (reading handwriting is the hard part). The lite model is only the fallback.
+# NOTE: check these names against the models available on your API key.
 MODELS_TO_TRY = [
-    "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
 ]
 
 EXAM_TYPES = {
     "Short Quiz (10 Marks)": 10,
     "Monthly Exam (100 Marks)": 100,
 }
+
+
+# ----------------------------------------------------------------------------
+# Schemas
+# ----------------------------------------------------------------------------
+class ExtractedAnswer(BaseModel):
+    """Stage 1: what is PHYSICALLY on the paper. The model does not know the correct answers here."""
+    page: int
+    question_number: str
+    question_snippet: str
+    question_type: Literal["mcq", "true_false", "essay"]
+    max_score_on_paper: float  # marks printed next to the question, 0 if not shown
+    has_handwriting: bool
+    visual_mark_found: str
+    student_answer: str
+    confidence: Literal["high", "medium", "low"]
+
+
+class ExtractionResult(BaseModel):
+    answers: List[ExtractedAnswer]
+
+
+class GradedQuestion(BaseModel):
+    """Stage 2: grading from text only (no images)."""
+    question_number: str
+    correct_answer: str
+    status: Literal["Correct", "Partially Correct", "Incorrect"]
+    score_awarded: float
+    max_score: float
+    reason: str
+
+
+class GradingResult(BaseModel):
+    questions: List[GradedQuestion]
 
 
 class QuestionEvaluation(BaseModel):
@@ -46,14 +86,20 @@ class QuestionEvaluation(BaseModel):
     score_awarded: float
     max_score: float
     reason: str
+    confidence: str = "high"
+    needs_review: bool = False
 
 
 class PaperEvaluation(BaseModel):
     questions: List[QuestionEvaluation]
     total_score: float
     total_max_score: float
+    warnings: List[str] = []
 
 
+# ----------------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------------
 def get_api_key() -> str:
     try:
         if "GEMINI_API_KEY" in st.secrets:
@@ -341,7 +387,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                     reader.onload = (e) => {{
                         const img = new Image();
                         img.onload = () => {{
-                            const maxDim = 1200;
+                            const maxDim = {IMAGE_MAX_DIM};
                             let w = img.width;
                             let h = img.height;
                             if (Math.max(w, h) > maxDim) {{
@@ -353,7 +399,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                             canvas.height = h;
                             const ctx = canvas.getContext("2d");
                             ctx.drawImage(img, 0, 0, w, h);
-                            resolve(canvas.toDataURL("image/jpeg", 0.82));
+                            resolve(canvas.toDataURL("image/jpeg", 0.92));
                         }};
                         img.src = e.target.result;
                     }};
@@ -436,7 +482,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
         f.write(html_code)
 
     comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
-    payload = comp_func(key=f"multi_cap_v7_{reset_token}", default={"token": reset_token, "images": []})
+    payload = comp_func(key=f"multi_cap_v8_{reset_token}", default={"token": reset_token, "images": []})
 
     pages: List[Tuple[bytes, str]] = []
     if isinstance(payload, dict) and payload.get("token") == reset_token:
@@ -452,25 +498,57 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
 def load_prepared_book() -> dict:
     with open(BOOK_CONTEXT_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    data["compact_content"] = re.sub(r"\s+", " ", data["content"]).strip()
+    text = data["content"]
+    # Keep line breaks / paragraphs (they help the model locate the right passage).
+    # Only collapse runs of spaces/tabs and excessive blank lines.
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    data["compact_content"] = text.strip()
     return data
 
 
-STRICT_SYSTEM_INSTRUCTION = (
-    "You are an honest, accurate academic exam grader. Never invent handwritten marks that are not physically drawn by a human hand on the paper.\n"
-    "NOTE: Printed parentheses around option letters like '(a)', '(b)', '(c)', '(d)' are PART OF THE PRINTED TEXT — NOT handwritten circles!\n"
-    "FOLLOW THIS EXACT ORDER FOR EACH QUESTION (IN ENGLISH):\n"
-    "1. question_snippet: First 5-8 words of THIS question to stay locked on its own lines without bleeding into other questions.\n"
-    "2. is_blank: True if there is NO real handwritten pen/pencil mark on this question; False ONLY if a genuine handwritten mark exists.\n"
-    "3. visual_mark_found: If is_blank is True, write 'None (blank)'. Otherwise state the real handwritten mark seen (ignoring any option crossed out with 'X').\n"
-    "4. student_answer: If is_blank is True, write '[BLANK / NO ANSWER]'. Otherwise write BOTH option letter + full printed text for MCQ (e.g., 'c) Microsoft Windows'), or 'True'/'False' for True/False.\n"
-    "5. correct_answer: Exact answer from the reference book (BOTH option letter + full text for MCQ, or 'True'/'False').\n"
-    "6. status, score_awarded (0 if is_blank is True), max_score, and a 1-sentence reason from the reference book."
+# ----------------------------------------------------------------------------
+# Prompts
+# ----------------------------------------------------------------------------
+EXTRACT_SYSTEM_INSTRUCTION = (
+    "You are a TRANSCRIBER of student exam papers, NOT a grader. You do NOT know the correct answers and must never "
+    "try to work them out. Your only job is to report what is physically visible on the pages.\n"
+    "RULES:\n"
+    "- List ONLY questions that are actually visible on the pages. Never invent questions or answers.\n"
+    "- Printed parentheses around option letters like '(a)', '(b)', '(c)', '(d)' are PRINTED TEXT, not student marks.\n"
+    "- A student mark is something drawn by hand: a pen/pencil circle, tick, underline, dash, or handwritten text.\n"
+    "- Options crossed out with 'X' are rejected by the student; the chosen option is the one with a clean circle/tick/underline.\n"
+    "- has_handwriting=false if there is no real handwritten mark for that question. Then visual_mark_found='None (blank)' "
+    "and student_answer='[BLANK / NO ANSWER]'.\n"
+    "- For MCQ, student_answer = option letter + full printed option text (e.g. 'c) Microsoft Windows').\n"
+    "- For True/False, student_answer = 'True' or 'False' (never a symbol or T/F).\n"
+    "- For essay questions, student_answer = a faithful transcription of the handwriting. Write [unclear] for words you cannot read. Never complete or correct the student's text.\n"
+    "- visual_mark_found: describe exactly what you see and where (e.g. 'pen circle around option b on page 2').\n"
+    "- confidence: 'high' only if the mark/text is clearly readable; 'medium' if somewhat unclear; 'low' if you are guessing.\n"
+    "- question_snippet: the first 5-8 words of the printed question so each answer stays tied to its own question.\n"
+    "- max_score_on_paper: the marks printed beside the question, or 0 if none is shown.\n"
+    "- Write all fields in English except quoted student/printed text, which stays in its original language."
+)
+
+GRADER_SYSTEM_INSTRUCTION = (
+    "You are an honest, accurate academic exam grader. You are given (1) a reference book and (2) a list of student "
+    "answers that were already transcribed from the paper. Grade ONLY from the reference book.\n"
+    "RULES:\n"
+    "- Do NOT change or reinterpret the student's answer; it is already extracted.\n"
+    "- correct_answer: the exact answer according to the reference book (letter + full text for MCQ, 'True'/'False' for true/false, "
+    "a short model answer for essay questions).\n"
+    "- If the reference book does not contain the answer, set correct_answer='NOT FOUND IN BOOK', status='Incorrect', "
+    "score_awarded=0 and say so in the reason. Never answer from your own outside knowledge.\n"
+    "- If a student's answer is '[BLANK / NO ANSWER]', score_awarded must be 0 and status 'Incorrect'.\n"
+    "- Essay answers: award partial credit by how many required points from the book are present; status 'Partially Correct' when partially right.\n"
+    "- reason: one short sentence that cites the book content used.\n"
+    "- Return exactly one result per input question, using the same question_number."
 )
 
 
 @st.cache_resource(ttl=5400)
 def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optional[str]:
+    """Context cache of the book for the grading (text-only) stage."""
     if not api_key:
         return None
     try:
@@ -478,8 +556,8 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_v18_{model_name}",
-                system_instruction=STRICT_SYSTEM_INSTRUCTION,
+                display_name=f"book_cache_v19_{model_name}",
+                system_instruction=GRADER_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
             ),
@@ -501,11 +579,218 @@ def get_shared_session() -> dict:
 
 
 def prepare_clean_image(img_bytes: bytes) -> bytes:
+    """Fix orientation, cap size, encode once at high quality (no double low-quality compression)."""
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
+    if max(img.size) > IMAGE_MAX_DIM:
+        img.thumbnail((IMAGE_MAX_DIM, IMAGE_MAX_DIM), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=82)
+    img.save(buf, format="JPEG", quality=IMAGE_JPEG_QUALITY)
     return buf.getvalue()
+
+
+def _high_res_kwargs() -> dict:
+    level = getattr(getattr(types, "MediaResolution", None), "MEDIA_RESOLUTION_HIGH", None)
+    return {"media_resolution": level} if level is not None else {}
+
+
+# ----------------------------------------------------------------------------
+# Stage 1: extraction (images only, NO book)
+# ----------------------------------------------------------------------------
+async def extract_answers_async(
+    client: "genai.Client",
+    pages: List[Tuple[bytes, str]],
+    total_marks: int,
+    errors: List[str],
+) -> Tuple[ExtractionResult, str]:
+    contents: list = [
+        f"These {len(pages)} page(s) belong to ONE student's exam (total marks: {total_marks}). "
+        "Transcribe every visible question and the student's answer to it."
+    ]
+    for i, (img_bytes, _) in enumerate(pages, start=1):
+        contents.append(f"Page {i}:")
+        contents.append(types.Part.from_bytes(data=prepare_clean_image(img_bytes), mime_type="image/jpeg"))
+
+    for model_name in MODELS_TO_TRY:
+        try:
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=EXTRACT_SYSTEM_INSTRUCTION,
+                        response_mime_type="application/json",
+                        response_schema=ExtractionResult,
+                        **_high_res_kwargs(),
+                    ),
+                ),
+                timeout=75.0,
+            )
+            result = ExtractionResult.model_validate_json(response.text)
+            if not result.answers:
+                errors.append(f"[extract / {model_name}]: no questions detected")
+                continue
+            return result, model_name
+        except Exception as e:
+            errors.append(f"[extract / {model_name}]: {type(e).__name__}: {e}")
+    raise RuntimeError(" | ".join(errors))
+
+
+# ----------------------------------------------------------------------------
+# Stage 2: grading (text only: extracted answers + book)
+# ----------------------------------------------------------------------------
+async def grade_extracted_async(
+    client: "genai.Client",
+    api_key: str,
+    book_text: str,
+    extraction: ExtractionResult,
+    total_marks: int,
+    marks_distribution: str,
+    errors: List[str],
+) -> Tuple[GradingResult, str]:
+    distribution_rule = (
+        f"Follow this exact marks distribution / rubric rule: {marks_distribution}"
+        if marks_distribution.strip()
+        else (
+            "If marks_on_paper is greater than 0 for a question, use it as max_score; otherwise distribute the remaining "
+            f"marks fairly so that all max_score values sum to exactly {total_marks}."
+        )
+    )
+
+    student_payload = [
+        {
+            "question_number": a.question_number,
+            "question_snippet": a.question_snippet,
+            "question_type": a.question_type,
+            "marks_on_paper": a.max_score_on_paper,
+            "student_answer": a.student_answer,
+        }
+        for a in extraction.answers
+    ]
+    grading_instructions = (
+        f"Total Marks: {total_marks}\nRubric: {distribution_rule}\n\n"
+        "Student answers (already transcribed, do not change them):\n"
+        f"{json.dumps(student_payload, ensure_ascii=False, indent=2)}"
+    )
+
+    for model_name in MODELS_TO_TRY:
+        cache_name = get_cached_book_name(api_key, model_name, book_text)
+        attempts = [True, False] if cache_name else [False]
+        for attempt_cached in attempts:
+            try:
+                config_kwargs = {
+                    "response_mime_type": "application/json",
+                    "response_schema": GradingResult,
+                }
+                if attempt_cached and cache_name:
+                    contents = grading_instructions
+                    config_kwargs["cached_content"] = cache_name
+                else:
+                    contents = f"### Reference Book:\n{book_text}\n\n{grading_instructions}"
+                    config_kwargs["system_instruction"] = GRADER_SYSTEM_INSTRUCTION
+
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                        config=types.GenerateContentConfig(**config_kwargs),
+                    ),
+                    timeout=60.0,
+                )
+                result = GradingResult.model_validate_json(response.text)
+                tag = f"{model_name} ({'Cached' if (attempt_cached and cache_name) else 'Direct'})"
+                return result, tag
+            except Exception as e:
+                mode_str = "Cached" if (attempt_cached and cache_name) else "Direct"
+                errors.append(f"[grade / {model_name} / {mode_str}]: {type(e).__name__}: {e}")
+                if attempt_cached:
+                    get_cached_book_name.clear()
+                    continue
+                break
+    raise RuntimeError(" | ".join(errors))
+
+
+# ----------------------------------------------------------------------------
+# Merge + validate in code (do not blindly trust model numbers)
+# ----------------------------------------------------------------------------
+def merge_and_validate(extraction: ExtractionResult, grading: GradingResult, total_marks: int) -> PaperEvaluation:
+    graded_by_q = {}
+    for g in grading.questions:
+        graded_by_q.setdefault(g.question_number.strip(), g)
+
+    warnings: List[str] = []
+    questions: List[QuestionEvaluation] = []
+
+    for a in extraction.answers:
+        g = graded_by_q.get(a.question_number.strip())
+        is_blank = (not a.has_handwriting) or a.student_answer.strip().startswith("[BLANK")
+        needs_review = a.confidence != "high"
+
+        if g is None:
+            warnings.append(f"Question {a.question_number} was not graded by the model — review manually.")
+            questions.append(
+                QuestionEvaluation(
+                    question_number=a.question_number,
+                    question_snippet=a.question_snippet,
+                    is_blank=is_blank,
+                    visual_mark_found=a.visual_mark_found,
+                    student_answer=a.student_answer,
+                    correct_answer="—",
+                    status="Incorrect",
+                    score_awarded=0.0,
+                    max_score=a.max_score_on_paper,
+                    reason="Not graded by the model; manual review required.",
+                    confidence=a.confidence,
+                    needs_review=True,
+                )
+            )
+            continue
+
+        max_score = max(0.0, g.max_score)
+        score = max(0.0, min(g.score_awarded, max_score))
+        status = g.status
+        reason = g.reason
+
+        if is_blank:
+            score = 0.0
+            status = "Incorrect"
+        elif status == "Correct" and score < max_score:
+            status = "Partially Correct"
+        elif status == "Incorrect" and score > 0:
+            status = "Partially Correct"
+
+        if g.correct_answer.strip().upper().startswith("NOT FOUND"):
+            needs_review = True
+
+        questions.append(
+            QuestionEvaluation(
+                question_number=a.question_number,
+                question_snippet=a.question_snippet,
+                is_blank=is_blank,
+                visual_mark_found=a.visual_mark_found,
+                student_answer=a.student_answer,
+                correct_answer=g.correct_answer,
+                status=status,
+                score_awarded=score,
+                max_score=max_score,
+                reason=reason,
+                confidence=a.confidence,
+                needs_review=needs_review,
+            )
+        )
+
+    total_score = round(sum(q.score_awarded for q in questions), 2)
+    total_max = round(sum(q.max_score for q in questions), 2)
+    if abs(total_max - total_marks) > 0.01:
+        warnings.append(
+            f"Question marks add up to {total_max}, but the exam is {total_marks}. Check the marks rule or missed questions."
+        )
+    return PaperEvaluation(
+        questions=questions,
+        total_score=total_score,
+        total_max_score=total_max,
+        warnings=warnings,
+    )
 
 
 async def grade_paper_async(
@@ -514,77 +799,33 @@ async def grade_paper_async(
     pages: List[Tuple[bytes, str]],
     total_marks: int,
     marks_distribution: str,
-) -> Tuple[PaperEvaluation, str, float]:
+) -> Tuple[PaperEvaluation, str, float, ExtractionResult]:
     t0 = time.perf_counter()
     client = genai.Client(api_key=api_key)
+    errors: List[str] = []
 
-    distribution_rule = (
-        f"Follow this exact marks distribution / rubric rule: {marks_distribution}"
-        if marks_distribution.strip()
-        else f"If question marks are written on the paper, use them; otherwise distribute the {total_marks} marks fairly across all questions so they sum up to {total_marks}."
+    extraction, extract_model = await extract_answers_async(client, pages, total_marks, errors)
+    grading, grade_tag = await grade_extracted_async(
+        client, api_key, book_text, extraction, total_marks, marks_distribution, errors
     )
+    evaluation = merge_and_validate(extraction, grading, total_marks)
 
-    grading_instructions = (
-        "All attached images belong to ONE SINGLE student's exam submission.\n"
-        "- Printed parentheses like (a), (b), (c), (d) are NOT student circles! If a question has NO handwritten mark, set is_blank=True, visual_mark_found='None (blank)', student_answer='[BLANK / NO ANSWER]', status='Incorrect', and score_awarded=0.\n"
-        "- Ignore crossed-out ('X') options; choose the option with a clean pen/pencil circle, tick, dash, or underline.\n"
-        "- For MCQ, ALWAYS include BOTH letter and full option text in student_answer and correct_answer.\n"
-        "- For True/False, ALWAYS write 'True' or 'False' (never ✓/✗ or T/F).\n"
-        f"Total Marks: {total_marks} | Pages: {len(pages)} | Rubric: {distribution_rule}"
-    )
-
-    image_parts = [
-        types.Part.from_bytes(data=prepare_clean_image(img_bytes), mime_type="image/jpeg")
-        for img_bytes, _ in pages
-    ]
-
-    errors = []
-    for model_name in MODELS_TO_TRY:
-        cache_name = get_cached_book_name(api_key, model_name, book_text)
-        attempts = [True, False] if cache_name else [False]
-        for attempt_cached in attempts:
-            try:
-                config_kwargs = {
-                    "response_mime_type": "application/json",
-                    "response_schema": PaperEvaluation,
-                    "temperature": 0.0,
-                }
-                if attempt_cached and cache_name:
-                    contents = [grading_instructions] + image_parts
-                    config_kwargs["cached_content"] = cache_name
-                else:
-                    contents = [f"### Reference Book:\n{book_text}\n\n{grading_instructions}"] + image_parts
-                    config_kwargs["system_instruction"] = STRICT_SYSTEM_INSTRUCTION
-
-                response = await asyncio.wait_for(
-                    client.aio.models.generate_content(
-                        model=model_name,
-                        contents=contents,
-                        config=types.GenerateContentConfig(**config_kwargs),
-                    ),
-                    timeout=35.0,
-                )
-                elapsed = round(time.perf_counter() - t0, 1)
-                status_tag = f"{model_name} ({'Cached' if (attempt_cached and cache_name) else 'Direct'})"
-                return PaperEvaluation.model_validate_json(response.text), status_tag, elapsed
-            except Exception as e:
-                mode_str = "Cached" if (attempt_cached and cache_name) else "Direct"
-                errors.append(f"[{model_name} / {mode_str}]: {type(e).__name__}: {e}")
-                if attempt_cached:
-                    get_cached_book_name.clear()
-                    continue
-                break
-
-    raise RuntimeError(" | ".join(errors) if errors else "Unknown grading failure")
+    elapsed = round(time.perf_counter() - t0, 1)
+    tag = f"read: {extract_model} | grade: {grade_tag}"
+    return evaluation, tag, elapsed, extraction
 
 
-# Initialize resources
+# ----------------------------------------------------------------------------
+# App
+# ----------------------------------------------------------------------------
 api_key = get_api_key()
 book_data = load_prepared_book()
 shared = get_shared_session()
 
 if "my_last_result" not in st.session_state:
     st.session_state.my_last_result = None
+if "last_extraction" not in st.session_state:
+    st.session_state.last_extraction = None
 if "last_meta" not in st.session_state:
     st.session_state.last_meta = None
 if "last_error" not in st.session_state:
@@ -595,6 +836,15 @@ if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 1
 if "is_grading" not in st.session_state:
     st.session_state.is_grading = False
+
+
+def reset_session_state() -> None:
+    st.session_state.my_last_result = None
+    st.session_state.last_extraction = None
+    st.session_state.last_meta = None
+    st.session_state.last_error = None
+    st.session_state.uploader_key += 1
+
 
 apply_theme(st.session_state.dark_mode)
 
@@ -652,10 +902,7 @@ with st.container(border=True):
                     shared["total_graded_papers"] = 0
                     shared["session_finished"] = False
                     shared["shared_marks_distribution"] = ""
-                st.session_state.my_last_result = None
-                st.session_state.last_meta = None
-                st.session_state.last_error = None
-                st.session_state.uploader_key += 1
+                reset_session_state()
                 gc.collect()
                 st.rerun()
 
@@ -683,10 +930,7 @@ with st.sidebar:
                 shared["total_graded_papers"] = 0
                 shared["session_finished"] = False
                 shared["shared_marks_distribution"] = ""
-            st.session_state.my_last_result = None
-            st.session_state.last_meta = None
-            st.session_state.last_error = None
-            st.session_state.uploader_key += 1
+            reset_session_state()
             gc.collect()
             st.rerun()
 
@@ -702,10 +946,7 @@ if shared["session_finished"]:
             shared["total_graded_papers"] = 0
             shared["session_finished"] = False
             shared["shared_marks_distribution"] = ""
-        st.session_state.my_last_result = None
-        st.session_state.last_meta = None
-        st.session_state.last_error = None
-        st.session_state.uploader_key += 1
+        reset_session_state()
         gc.collect()
         st.rerun()
 else:
@@ -739,6 +980,7 @@ else:
 
         if pages_to_grade:
             st.session_state.my_last_result = None
+            st.session_state.last_extraction = None
             st.session_state.last_meta = None
             st.write("")
             if st.button(
@@ -751,7 +993,7 @@ else:
                 st.session_state.last_error = None
                 with st.spinner(f"Grading 1 student ({len(pages_to_grade)} page(s))..."):
                     try:
-                        result, status_tag, elapsed = asyncio.run(
+                        result, status_tag, elapsed, extraction = asyncio.run(
                             grade_paper_async(
                                 api_key=api_key,
                                 book_text=book_data["compact_content"],
@@ -761,7 +1003,10 @@ else:
                             )
                         )
                         st.session_state.my_last_result = result
-                        st.session_state.last_meta = f"⚡ Graded 1 student ({len(pages_to_grade)} pages) in {elapsed}s via {status_tag}"
+                        st.session_state.last_extraction = extraction
+                        st.session_state.last_meta = (
+                            f"⚡ Graded 1 student ({len(pages_to_grade)} pages) in {elapsed}s — {status_tag}"
+                        )
                         st.session_state.uploader_key += 1
                         with shared["lock"]:
                             shared["total_graded_papers"] += 1
@@ -782,15 +1027,13 @@ else:
                 st.caption(st.session_state.last_meta)
         with res_top2:
             if st.button("🧹 Clear & Next Student", type="primary", use_container_width=True):
-                st.session_state.my_last_result = None
-                st.session_state.last_meta = None
-                st.session_state.last_error = None
-                st.session_state.uploader_key += 1
+                reset_session_state()
                 gc.collect()
                 st.rerun()
 
         badge_bg = "#FFFFFF" if st.session_state.dark_mode else "#09090B"
         badge_text = "#09090B" if st.session_state.dark_mode else "#FFFFFF"
+        review_count = sum(1 for q in res.questions if q.needs_review)
 
         st.markdown(
             f"""
@@ -809,15 +1052,31 @@ else:
             unsafe_allow_html=True,
         )
 
+        for w in res.warnings:
+            st.warning(w)
+        if review_count:
+            st.warning(f"⚠️ {review_count} question(s) are marked for manual review (low confidence or not found in the book).")
+
         for q in res.questions:
             icon = "🟢" if q.status == "Correct" else ("🟡" if q.status == "Partially Correct" else "🔴")
+            review_tag = " — ⚠️ Review" if q.needs_review else ""
             with st.container(border=True):
                 col1, col2 = st.columns([4.2, 1])
                 with col1:
-                    st.markdown(f"**{icon} Question {q.question_number} — {q.status}**")
-                    st.caption(f"📝 {q.question_snippet}...  |  👁️ Detected Mark: {q.visual_mark_found}")
+                    st.markdown(f"**{icon} Question {q.question_number} — {q.status}{review_tag}**")
+                    st.caption(
+                        f"📝 {q.question_snippet}...  |  👁️ Detected Mark: {q.visual_mark_found}  |  🎯 Read confidence: {q.confidence}"
+                    )
                     st.write(f"**Student Answer:** {q.student_answer}")
                     st.write(f"**Correct Answer:** {q.correct_answer}")
                     st.info(f"**Grading Reason:** {q.reason}")
                 with col2:
                     st.metric("Score", f"{q.score_awarded} / {q.max_score}")
+
+        if st.session_state.last_extraction:
+            with st.expander("🔍 What the model read from the paper (stage 1, before grading)"):
+                for a in st.session_state.last_extraction.answers:
+                    st.markdown(
+                        f"- **P{a.page} · Q{a.question_number}** ({a.question_type}, {a.confidence}): "
+                        f"{a.student_answer}  \n  _{a.visual_mark_found}_"
+                    )
