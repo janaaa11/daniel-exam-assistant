@@ -11,7 +11,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 from pydantic import BaseModel
 
 load_dotenv(override=True)
@@ -35,6 +35,7 @@ EXAM_TYPES = {
 class QuestionEvaluation(BaseModel):
     question_number: str
     student_answer: str
+    correct_answer: str
     status: Literal["Correct", "Partially Correct", "Incorrect"]
     score_awarded: float
     max_score: float
@@ -303,6 +304,20 @@ def load_prepared_book() -> dict:
     return data
 
 
+STRICT_SYSTEM_INSTRUCTION = (
+    "You are a strict, forensic academic exam grader. Grade student answers using the reference book and respond completely in English.\n"
+    "CRITICAL ANTI-HALLUCINATION & UNIFIED OUTPUT RULES (MANDATORY):\n"
+    "1. NEVER assume, guess, infer, or auto-complete an answer from the reference book if the student did not visibly write or mark it on the exam paper.\n"
+    "2. BLANK ANSWERS: If the answer space next to or under a question is empty, blank, or has no student handwriting/selection mark, set student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', score_awarded = 0, and reason = 'Question left unanswered by the student.'\n"
+    "3. MULTIPLE CHOICE (MCQ) / TRUE-FALSE: Only credit a choice if there is a clear, deliberate student mark (circle, tick, underline, shading, or written letter) on that specific option. Printed option letters (A, B, C, D) alone are NOT student answers. If no option is visibly marked, treat it as '[BLANK / NO ANSWER]' with score 0.\n"
+    "4. FAINT / UNCLEAR HANDWRITING: Transcribe ONLY characters and words actually visible in the student's handwriting. Do NOT substitute textbook words for illegible scribbles. If handwriting is too faint or illegible to verify correctness, set student_answer = '[ILLEGIBLE / UNCLEAR HANDWRITING]', status = 'Incorrect', score_awarded = 0.\n"
+    "5. MANDATORY FIELDS FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
+    "   - student_answer: Exact visible student answer (or '[BLANK / NO ANSWER]' / '[ILLEGIBLE / UNCLEAR HANDWRITING]').\n"
+    "   - correct_answer: ALWAYS provide the exact correct answer/choice from the reference book (for both Correct and Incorrect answers).\n"
+    "   - reason: ALWAYS provide a clear, concise 1-2 sentence explanation based on the reference book justifying why the student's answer is correct, partially correct, or incorrect."
+)
+
+
 @st.cache_resource(ttl=6900)
 def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optional[str]:
     if not api_key:
@@ -312,11 +327,8 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_{model_name}",
-                system_instruction=(
-                    "You are an accurate academic exam grader. "
-                    "Grade student answers strictly using the cached reference book and respond completely in English."
-                ),
+                display_name=f"book_cache_unified_{model_name}",
+                system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
             ),
@@ -337,13 +349,16 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image(img_bytes: bytes, max_dim: int = 1024) -> Tuple[bytes, str]:
+def optimize_image(img_bytes: bytes, max_dim: int = 1400) -> Tuple[bytes, str]:
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+    # Boost contrast & sharpness so faint pencil/pen handwriting is clearly readable
+    img = ImageEnhance.Contrast(img).enhance(1.30)
+    img = ImageEnhance.Sharpness(img).enhance(1.35)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=78, optimize=True)
+    img.save(buf, format="JPEG", quality=82, optimize=True)
     return buf.getvalue(), "image/jpeg"
 
 
@@ -365,12 +380,17 @@ async def grade_paper_async(
 
     grading_instructions = (
         "All attached images (1 to 15 pages) belong to ONE SINGLE student's exam submission. "
-        "Combine and read all student answers across ALL pages as ONE exam, and compare strictly against the reference book. "
-        "Respond completely in English. For EVERY question:\n"
-        "1. Transcribe the student's answer.\n"
-        "2. Set status to 'Correct', 'Partially Correct', or 'Incorrect'.\n"
-        f"3. Assign score_awarded and max_score summing to {total_marks}. {distribution_rule}\n"
-        "4. Give a brief 1-sentence reason based on the reference book.\n\n"
+        "Carefully inspect the visual ink/pencil marks on every page before evaluating.\n"
+        "STRICT RULES:\n"
+        "- Do NOT hallucinate or fill in answers from the book when the student left a question blank.\n"
+        "- If a question has NO handwritten answer or NO clear selection mark (circle/tick/highlight/written letter), set student_answer to '[BLANK / NO ANSWER]', status to 'Incorrect', and score_awarded to 0.\n"
+        "- If handwriting is too faint or unreadable to confirm the answer, do NOT assume it is correct; mark it '[ILLEGIBLE / UNCLEAR HANDWRITING]' with score_awarded = 0.\n"
+        "Respond completely in English. For EVERY question on the paper, ALWAYS fill all fields in this exact structure:\n"
+        "1. student_answer: Transcribe the exact visible student answer (or '[BLANK / NO ANSWER]' / '[ILLEGIBLE / UNCLEAR HANDWRITING]').\n"
+        "2. correct_answer: ALWAYS state the exact correct answer/choice from the reference book (even when the student got it right).\n"
+        "3. status: Set to 'Correct', 'Partially Correct', or 'Incorrect'.\n"
+        f"4. score_awarded & max_score: Assign scores summing to {total_marks}. {distribution_rule}\n"
+        "5. reason: ALWAYS give a clear 1-2 sentence explanation based on the reference book.\n\n"
         f"Total Marks: {total_marks} | Total Pages for this ONE student: {len(pages)} | "
         f"Rubric / Distribution: {marks_distribution if marks_distribution.strip() else 'Auto'}"
     )
@@ -387,14 +407,14 @@ async def grade_paper_async(
             config_kwargs = {
                 "response_mime_type": "application/json",
                 "response_schema": PaperEvaluation,
-                "temperature": 0.1,
+                "temperature": 0.0,
             }
             if cache_name:
                 contents = [grading_instructions] + optimized_parts
                 config_kwargs["cached_content"] = cache_name
             else:
                 contents = [f"### Reference Book:\n{book_text}\n\n{grading_instructions}"] + optimized_parts
-                config_kwargs["system_instruction"] = "You are an accurate academic exam grader. Respond in English."
+                config_kwargs["system_instruction"] = STRICT_SYSTEM_INSTRUCTION
 
             response = await client.aio.models.generate_content(
                 model=model_name,
@@ -424,6 +444,10 @@ if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
+if "camera_key" not in st.session_state:
+    st.session_state.camera_key = 0
+if "captured_pages" not in st.session_state:
+    st.session_state.captured_pages = []
 if "is_grading" not in st.session_state:
     st.session_state.is_grading = False
 
@@ -476,6 +500,7 @@ with st.container(border=True):
                     shared["shared_marks_distribution"] = ""
                 st.session_state.my_last_result = None
                 st.session_state.last_meta = None
+                st.session_state.captured_pages = []
                 st.session_state.uploader_key += 1
                 st.rerun()
 
@@ -505,6 +530,7 @@ with st.sidebar:
                 shared["shared_marks_distribution"] = ""
             st.session_state.my_last_result = None
             st.session_state.last_meta = None
+            st.session_state.captured_pages = []
             st.session_state.uploader_key += 1
             st.rerun()
 
@@ -522,6 +548,7 @@ if shared["session_finished"]:
             shared["shared_marks_distribution"] = ""
         st.session_state.my_last_result = None
         st.session_state.last_meta = None
+        st.session_state.captured_pages = []
         st.session_state.uploader_key += 1
         st.rerun()
 else:
@@ -546,24 +573,54 @@ else:
                     shared["shared_marks_distribution"] = marks_distribution
 
     with st.container(border=True):
-        st.markdown(f"**3️⃣ Upload Images for ONE Student (Max {MAX_PAGES_PER_EXAM} pages per student):**")
+        st.markdown(f"**3️⃣ Add Exam Pages for ONE Student (Max {MAX_PAGES_PER_EXAM} pages per student):**")
+
+        input_mode = st.radio(
+            "Choose input method:",
+            ["📁 Upload from Gallery / Files (Recommended)", "📸 Live In-App Camera (Multi-Page)"],
+            horizontal=True,
+        )
 
         pages_to_grade: List[Tuple[bytes, str]] = []
 
-        uploaded_files = st.file_uploader(
-            f"Take photos or select ALL pages belonging to ONE student (1 to {MAX_PAGES_PER_EXAM} pages)",
-            type=["png", "jpg", "jpeg", "webp"],
-            accept_multiple_files=True,
-            key=f"uploader_{st.session_state.uploader_key}",
-        )
-        if uploaded_files:
-            if len(uploaded_files) > MAX_PAGES_PER_EXAM:
-                st.error(f"Too many pages selected ({len(uploaded_files)}). Please select up to {MAX_PAGES_PER_EXAM} pages only.")
-            else:
-                st.info(
-                    f"📑 Ready to grade **1 Student** ({len(uploaded_files)} page(s) attached)"
-                )
-                pages_to_grade = [(f.getvalue(), f.type) for f in uploaded_files]
+        if input_mode == "📁 Upload from Gallery / Files (Recommended)":
+            uploaded_files = st.file_uploader(
+                f"Select ALL pages belonging to ONE student (1 to {MAX_PAGES_PER_EXAM} pages)",
+                type=["png", "jpg", "jpeg", "webp"],
+                accept_multiple_files=True,
+                key=f"uploader_{st.session_state.uploader_key}",
+            )
+            if uploaded_files:
+                if len(uploaded_files) > MAX_PAGES_PER_EXAM:
+                    st.error(f"Too many pages selected ({len(uploaded_files)}). Please select up to {MAX_PAGES_PER_EXAM} pages only.")
+                else:
+                    pages_to_grade = [(f.getvalue(), f.type) for f in uploaded_files]
+                    st.info(f"📑 Ready to grade **1 Student** ({len(pages_to_grade)} page(s) attached)")
+        else:
+            st.caption("Take a photo of each page and click 'Add Page' — works reliably on Android & iPhone without page reloads.")
+            cam_photo = st.camera_input(
+                "Capture student page",
+                key=f"cam_{st.session_state.camera_key}",
+            )
+            cam_col1, cam_col2 = st.columns([1, 1])
+            with cam_col1:
+                if cam_photo is not None:
+                    if len(st.session_state.captured_pages) >= MAX_PAGES_PER_EXAM:
+                        st.error(f"Maximum {MAX_PAGES_PER_EXAM} pages reached.")
+                    elif st.button("➕ Add Captured Page", use_container_width=True):
+                        st.session_state.captured_pages.append((cam_photo.getvalue(), "image/jpeg"))
+                        st.session_state.camera_key += 1
+                        st.rerun()
+            with cam_col2:
+                if st.session_state.captured_pages:
+                    if st.button("🗑️ Clear Captured Pages", use_container_width=True):
+                        st.session_state.captured_pages = []
+                        st.session_state.camera_key += 1
+                        st.rerun()
+
+            if st.session_state.captured_pages:
+                pages_to_grade = st.session_state.captured_pages
+                st.info(f"📑 Ready to grade **1 Student** ({len(pages_to_grade)} captured page(s))")
 
         if pages_to_grade:
             st.write("")
@@ -588,6 +645,8 @@ else:
                         st.session_state.my_last_result = result
                         st.session_state.last_meta = f"⚡ Graded 1 student ({len(pages_to_grade)} pages) in {elapsed}s via {status_tag}"
                         st.session_state.uploader_key += 1
+                        st.session_state.captured_pages = []
+                        st.session_state.camera_key += 1
                         with shared["lock"]:
                             shared["total_graded_papers"] += 1
                     except Exception as e:
@@ -629,6 +688,7 @@ else:
                 with col1:
                     st.markdown(f"**{icon} Question {q.question_number} — {q.status}**")
                     st.write(f"**Student Answer:** {q.student_answer}")
+                    st.write(f"**Correct Answer:** {q.correct_answer}")
                     st.info(f"**Grading Reason:** {q.reason}")
                 with col2:
                     st.metric("Score", f"{q.score_awarded} / {q.max_score}")
