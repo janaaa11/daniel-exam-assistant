@@ -24,9 +24,10 @@ st.set_page_config(page_title="Daniel's Exam Assistant", page_icon="🎓", layou
 BOOK_CONTEXT_PATH = "book_context.json"
 MAX_PAGES_PER_EXAM = 15
 
+# Official, fast, high-accuracy Gemini Vision models
 MODELS_TO_TRY = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 ]
 
 EXAM_TYPES = {
@@ -35,10 +36,10 @@ EXAM_TYPES = {
 }
 
 
-# Spatial Anchor (question_snippet) locks the model onto ONE question block at a time
 class QuestionEvaluation(BaseModel):
     question_number: str
     question_snippet: str
+    is_blank: bool
     visual_mark_found: str
     student_answer: str
     correct_answer: str
@@ -341,7 +342,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                     reader.onload = (e) => {{
                         const img = new Image();
                         img.onload = () => {{
-                            const maxDim = 1350;
+                            const maxDim = 1400;
                             let w = img.width;
                             let h = img.height;
                             if (Math.max(w, h) > maxDim) {{
@@ -436,7 +437,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
         f.write(html_code)
 
     comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
-    payload = comp_func(key=f"multi_cap_v4_{reset_token}", default={"token": reset_token, "images": []})
+    payload = comp_func(key=f"multi_cap_v5_{reset_token}", default={"token": reset_token, "images": []})
 
     pages: List[Tuple[bytes, str]] = []
     if isinstance(payload, dict) and payload.get("token") == reset_token:
@@ -457,13 +458,15 @@ def load_prepared_book() -> dict:
 
 
 STRICT_SYSTEM_INSTRUCTION = (
-    "You are an expert academic exam grader. Read the exam paper naturally like a human teacher, keeping each question and its own options strictly separated so choices from one question NEVER bleed into another question.\n"
-    "FOLLOW THIS EXACT ORDER FOR EACH QUESTION (IN ENGLISH):\n"
-    "1. question_snippet: Transcribe the first 5-8 words of THIS specific question to lock onto its exact lines on the page.\n"
-    "2. visual_mark_found: Look ONLY within THIS question's options/answer space and report the exact handwritten mark seen (e.g., 'Pencil circle around (c); (d) crossed out with X'). Never pull marks from adjacent questions above or below.\n"
-    "3. student_answer: Based ONLY on visual_mark_found (ignoring 'X' cross-outs; picking clean circles, ticks, dashes, dots, or underlines), write the student's answer — BOTH option letter and full printed text for MCQ (e.g., 'c) Microsoft Windows'), 'True'/'False' for True/False, or '[BLANK / NO ANSWER]' if unmarked.\n"
-    "4. correct_answer: Now look up the exact answer in the reference book (BOTH letter + full text for MCQ, or 'True'/'False').\n"
-    "5. status, score_awarded, max_score, and a 1-sentence reason from the reference book."
+    "You are an honest, strict academic exam grader. Never hallucinate or invent handwritten marks that are not physically drawn by a human hand on the paper.\n"
+    "NOTE: Printed parentheses around option letters like '(a)', '(b)', '(c)', '(d)' are PART OF THE PRINTED TEXT — they are NOT handwritten circles!\n"
+    "FOLLOW THESE EXACT STEPS FOR EACH QUESTION (IN ENGLISH):\n"
+    "1. question_snippet: Transcribe the first 5-8 words of THIS question.\n"
+    "2. is_blank: Set to True if there is NO actual handwritten pen/pencil mark (no hand-drawn circle around an option, no tick, no underline, no handwritten words). Set to False ONLY if you genuinely see a real handwritten mark.\n"
+    "3. visual_mark_found: If is_blank is True, write 'None (completely blank)'. Otherwise describe the exact real handwritten mark seen (ignoring any option crossed out with 'X').\n"
+    "4. student_answer: If is_blank is True, write '[BLANK / NO ANSWER]'. Otherwise write the selected non-crossed-out option letter + full printed text (e.g., 'a) coding') or 'True'/'False'.\n"
+    "5. correct_answer: Look up the exact correct answer in the reference book (option letter + full text, or 'True'/'False').\n"
+    "6. status, score_awarded (0 if is_blank is True), max_score, and a 1-sentence reason from the reference book."
 )
 
 
@@ -476,7 +479,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_anchor_v15_{model_name}",
+                display_name=f"book_cache_noblank_v16_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -499,7 +502,6 @@ def get_shared_session() -> dict:
 
 
 def prepare_clean_image(img_bytes: bytes) -> bytes:
-    """Keep the natural camera image untouched (no artificial contrast filters that distort pencil marks)."""
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
     buf = io.BytesIO()
@@ -524,12 +526,10 @@ async def grade_paper_async(
     )
 
     grading_instructions = (
-        "All attached images belong to ONE SINGLE student's exam submission. "
-        "Keep each question strictly separated from the questions above/below it:\n"
-        "1. Write 'question_snippet' (first few words of the question) first so you stay anchored on that exact question.\n"
-        "2. Inspect ONLY that question's options to write 'visual_mark_found' and 'student_answer' (ignore 'X' cross-outs; pick clean pen/pencil circles, ticks, dashes, or underlines).\n"
-        "3. Then check the reference book for 'correct_answer' and grade it.\n"
-        "- For MCQ, ALWAYS include BOTH letter and full option text (e.g., 'c) Microsoft Windows') in student_answer and correct_answer.\n"
+        "All attached images belong to ONE SINGLE student's exam submission.\n"
+        "- CRITICAL: Printed parentheses like (a), (b), (c), (d) are NOT student circles! If a question has NO handwritten pen/pencil mark, set is_blank=True, visual_mark_found='None (completely blank)', student_answer='[BLANK / NO ANSWER]', status='Incorrect', and score_awarded=0.\n"
+        "- Ignore any option crossed out with 'X'; select the option with a real hand-drawn pen/pencil circle, tick, dash, or underline.\n"
+        "- For MCQ, ALWAYS include BOTH letter and full option text in student_answer and correct_answer.\n"
         "- For True/False, ALWAYS write 'True' or 'False' (never ✓/✗ or T/F).\n"
         f"Total Marks: {total_marks} | Pages: {len(pages)} | Rubric: {distribution_rule}"
     )
