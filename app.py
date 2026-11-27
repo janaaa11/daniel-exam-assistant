@@ -36,6 +36,7 @@ EXAM_TYPES = {
 
 class QuestionEvaluation(BaseModel):
     question_number: str
+    visual_mark_found: str
     student_answer: str
     correct_answer: str
     status: Literal["Correct", "Partially Correct", "Incorrect"]
@@ -288,11 +289,6 @@ def apply_theme(dark_mode: bool) -> None:
 
 
 def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tuple[bytes, str]]:
-    """
-    Renders a native mobile camera + gallery multi-photo queue with instant client-side compression.
-    Works like an AI chat attachment bar: snap multiple photos consecutively without page reloads.
-    """
-    bg = "#141417" if dark_mode else "#FFFFFF"
     card = "#18181B" if dark_mode else "#F4F4F5"
     border = "#27272A" if dark_mode else "#E4E4E7"
     text = "#FAFAFA" if dark_mode else "#09090B"
@@ -385,7 +381,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
                     reader.onload = (e) => {{
                         const img = new Image();
                         img.onload = () => {{
-                            const maxDim = 1350;
+                            const maxDim = 1450;
                             let w = img.width;
                             let h = img.height;
                             if (Math.max(w, h) > maxDim) {{
@@ -397,7 +393,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
                             canvas.height = h;
                             const ctx = canvas.getContext("2d");
                             ctx.drawImage(img, 0, 0, w, h);
-                            resolve(canvas.toDataURL("image/jpeg", 0.82));
+                            resolve(canvas.toDataURL("image/jpeg", 0.85));
                         }};
                         img.src = e.target.result;
                     }};
@@ -473,7 +469,6 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
     </html>
     """
 
-    # Register an inline custom component via temporary directory once per session
     comp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mobile_cam_comp")
     os.makedirs(comp_dir, exist_ok=True)
     index_path = os.path.join(comp_dir, "index.html")
@@ -501,16 +496,17 @@ def load_prepared_book() -> dict:
 
 
 STRICT_SYSTEM_INSTRUCTION = (
-    "You are a strict, forensic academic exam grader. Grade student answers using the reference book and respond completely in English.\n"
-    "CRITICAL ANTI-HALLUCINATION & UNIFIED OUTPUT RULES (MANDATORY):\n"
-    "1. NEVER assume, guess, infer, or auto-complete an answer from the reference book if the student did not visibly write or mark it on the exam paper.\n"
-    "2. BLANK ANSWERS: If the answer space next to or under a question is empty, blank, or has no student handwriting/selection mark, set student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', score_awarded = 0, and reason = 'Question left unanswered by the student.'\n"
-    "3. MULTIPLE CHOICE (MCQ) / TRUE-FALSE: Only credit a choice if there is a clear, deliberate student mark (circle, tick, underline, shading, or written letter) on that specific option. Printed option letters (A, B, C, D) alone are NOT student answers. If no option is visibly marked, treat it as '[BLANK / NO ANSWER]' with score 0.\n"
-    "4. FAINT / UNCLEAR HANDWRITING: Transcribe ONLY characters and words actually visible in the student's handwriting. Do NOT substitute textbook words for illegible scribbles. If handwriting is too faint or illegible to verify correctness, set student_answer = '[ILLEGIBLE / UNCLEAR HANDWRITING]', status = 'Incorrect', score_awarded = 0.\n"
-    "5. MANDATORY FIELDS FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
-    "   - student_answer: Exact visible student answer (or '[BLANK / NO ANSWER]' / '[ILLEGIBLE / UNCLEAR HANDWRITING]').\n"
-    "   - correct_answer: ALWAYS provide the exact correct answer/choice from the reference book (for both Correct and Incorrect answers).\n"
-    "   - reason: ALWAYS provide a clear, concise 1-2 sentence explanation based on the reference book justifying why the student's answer is correct, partially correct, or incorrect."
+    "You are a precise, forensic academic exam grader. Grade student answers strictly against the reference book and respond completely in English.\n"
+    "CRITICAL VISUAL INSPECTION & MARK-DETECTION RULES (MANDATORY):\n"
+    "1. DETECT ANY STUDENT MARK: Students often mark answers casually using ANY handwritten mark: a large circle, a tiny circle, a tick/check mark (✓), a small dash/line (-), a dot, an underline, shading, or a written letter/word. Treat ANY non-crossed-out handwritten mark on or next to an option as the student's chosen answer! Do NOT ignore small circles, dashes, or faint ticks.\n"
+    "2. CROSSED-OUT ('X') OVERRIDE RULE: If a student marked an option and then crossed it out with an 'X' or scribbled over it, and marked ANOTHER option instead, IGNORE the crossed-out 'X' option completely and read the non-crossed-out marked option as the student's final answer.\n"
+    "3. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark/ink/pencil anywhere on or next to the question/options, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
+    "4. NO HALLUCINATION FROM BOOK: Never invent a student answer from the reference book when no mark exists on the paper.\n"
+    "5. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
+    "   - visual_mark_found: Describe the exact physical mark seen on the paper (e.g., 'Small circle around B (A is crossed out with X)' or 'Handwritten text: ...' or 'None').\n"
+    "   - student_answer: The exact option/text the student selected.\n"
+    "   - correct_answer: ALWAYS provide the exact correct answer/choice from the reference book (even when the student is correct).\n"
+    "   - reason: ALWAYS provide a clear 1-2 sentence explanation based on the reference book justifying why the student's answer is correct, partially correct, or incorrect."
 )
 
 
@@ -523,7 +519,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_unified_{model_name}",
+                display_name=f"book_cache_marks_v3_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -545,16 +541,16 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image(img_bytes: bytes, max_dim: int = 1350) -> Tuple[bytes, str]:
+def optimize_image(img_bytes: bytes, max_dim: int = 1450) -> Tuple[bytes, str]:
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-    # Boost contrast & sharpness so faint pencil/pen handwriting is clearly readable
-    img = ImageEnhance.Contrast(img).enhance(1.30)
+    # Boost contrast & sharpness so small circles, dashes, ticks, and faint pencil marks stand out clearly
+    img = ImageEnhance.Contrast(img).enhance(1.32)
     img = ImageEnhance.Sharpness(img).enhance(1.35)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=82, optimize=True)
+    img.save(buf, format="JPEG", quality=85, optimize=True)
     return buf.getvalue(), "image/jpeg"
 
 
@@ -576,17 +572,17 @@ async def grade_paper_async(
 
     grading_instructions = (
         "All attached images (1 to 15 pages) belong to ONE SINGLE student's exam submission. "
-        "Carefully inspect the visual ink/pencil marks on every page before evaluating.\n"
-        "STRICT RULES:\n"
-        "- Do NOT hallucinate or fill in answers from the book when the student left a question blank.\n"
-        "- If a question has NO handwritten answer or NO clear selection mark (circle/tick/highlight/written letter), set student_answer to '[BLANK / NO ANSWER]', status to 'Incorrect', and score_awarded to 0.\n"
-        "- If handwriting is too faint or unreadable to confirm the answer, do NOT assume it is correct; mark it '[ILLEGIBLE / UNCLEAR HANDWRITING]' with score_awarded = 0.\n"
-        "Respond completely in English. For EVERY question on the paper, ALWAYS fill all fields in this exact structure:\n"
-        "1. student_answer: Transcribe the exact visible student answer (or '[BLANK / NO ANSWER]' / '[ILLEGIBLE / UNCLEAR HANDWRITING]').\n"
-        "2. correct_answer: ALWAYS state the exact correct answer/choice from the reference book (even when the student got it right).\n"
-        "3. status: Set to 'Correct', 'Partially Correct', or 'Incorrect'.\n"
-        f"4. score_awarded & max_score: Assign scores summing to {total_marks}. {distribution_rule}\n"
-        "5. reason: ALWAYS give a clear 1-2 sentence explanation based on the reference book.\n\n"
+        "Inspect every option and answer space carefully before grading:\n"
+        "- Look closely for ANY handwritten mark: big circle, tiny circle, tick (✓), dash (-), dot, underline, shading, or written text. Any such mark counts as the student's chosen answer.\n"
+        "- If an option has an 'X' or scribble crossing it out AND another option has a clean mark, ignore the 'X' option and use the clean marked option.\n"
+        "- Only mark '[BLANK / NO ANSWER]' if there is truly no handwritten mark anywhere on that question.\n"
+        "Respond completely in English. For EVERY question on the paper, ALWAYS populate all fields:\n"
+        "1. visual_mark_found: Describe the exact mark visible on the paper.\n"
+        "2. student_answer: State the student's selected option/answer.\n"
+        "3. correct_answer: ALWAYS state the exact correct answer/choice from the reference book (both when Correct and Incorrect).\n"
+        "4. status: 'Correct', 'Partially Correct', or 'Incorrect'.\n"
+        f"5. score_awarded & max_score: Assign scores summing to {total_marks}. {distribution_rule}\n"
+        "6. reason: ALWAYS explain why the student's answer is right or wrong using the reference book.\n\n"
         f"Total Marks: {total_marks} | Total Pages for this ONE student: {len(pages)} | "
         f"Rubric / Distribution: {marks_distribution if marks_distribution.strip() else 'Auto'}"
     )
@@ -828,6 +824,7 @@ else:
                 col1, col2 = st.columns([4.2, 1])
                 with col1:
                     st.markdown(f"**{icon} Question {q.question_number} — {q.status}**")
+                    st.caption(f"👁️ Detected Mark: {q.visual_mark_found}")
                     st.write(f"**Student Answer:** {q.student_answer}")
                     st.write(f"**Correct Answer:** {q.correct_answer}")
                     st.info(f"**Grading Reason:** {q.reason}")
