@@ -1,3 +1,4 @@
+import gc
 import io
 import os
 import re
@@ -472,8 +473,14 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
     comp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".mobile_cam_comp")
     os.makedirs(comp_dir, exist_ok=True)
     index_path = os.path.join(comp_dir, "index.html")
-    with open(index_path, "w", encoding="utf-8") as f:
-        f.write(html_code)
+    if not os.path.exists(index_path):
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(html_code)
+    else:
+        with open(index_path, "r", encoding="utf-8") as f:
+            if f.read() != html_code:
+                with open(index_path, "w", encoding="utf-8") as fw:
+                    fw.write(html_code)
 
     comp_func = components.declare_component("mobile_multi_capture", path=comp_dir)
     raw_list = comp_func(key=f"multi_cap_{st.session_state.uploader_key}", default=[])
@@ -511,7 +518,7 @@ STRICT_SYSTEM_INSTRUCTION = (
 )
 
 
-@st.cache_resource(ttl=6900)
+@st.cache_resource(ttl=5400)
 def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optional[str]:
     if not api_key:
         return None
@@ -520,7 +527,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_marks_v4_{model_name}",
+                display_name=f"book_cache_marks_v5_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -547,7 +554,6 @@ def optimize_image(img_bytes: bytes, max_dim: int = 1450) -> Tuple[bytes, str]:
     img = ImageOps.exif_transpose(img).convert("RGB")
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-    # Boost contrast & sharpness so small circles, dashes, ticks, and faint pencil marks stand out clearly
     img = ImageEnhance.Contrast(img).enhance(1.32)
     img = ImageEnhance.Sharpness(img).enhance(1.35)
     buf = io.BytesIO()
@@ -597,30 +603,38 @@ async def grade_paper_async(
     last_error = None
     for model_name in MODELS_TO_TRY:
         cache_name = get_cached_book_name(api_key, model_name, book_text)
-        try:
-            config_kwargs = {
-                "response_mime_type": "application/json",
-                "response_schema": PaperEvaluation,
-                "temperature": 0.0,
-            }
-            if cache_name:
-                contents = [grading_instructions] + optimized_parts
-                config_kwargs["cached_content"] = cache_name
-            else:
-                contents = [f"### Reference Book:\n{book_text}\n\n{grading_instructions}"] + optimized_parts
-                config_kwargs["system_instruction"] = STRICT_SYSTEM_INSTRUCTION
+        # Try with cache first, and if cache expired/invalid, auto-clear cache and retry direct immediately
+        for attempt_cached in ([True, False] if cache_name else [False]):
+            try:
+                config_kwargs = {
+                    "response_mime_type": "application/json",
+                    "response_schema": PaperEvaluation,
+                    "temperature": 0.0,
+                }
+                if attempt_cached and cache_name:
+                    contents = [grading_instructions] + optimized_parts
+                    config_kwargs["cached_content"] = cache_name
+                else:
+                    contents = [f"### Reference Book:\n{book_text}\n\n{grading_instructions}"] + optimized_parts
+                    config_kwargs["system_instruction"] = STRICT_SYSTEM_INSTRUCTION
 
-            response = await client.aio.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(**config_kwargs),
-            )
-            elapsed = round(time.perf_counter() - t0, 1)
-            status_tag = f"{model_name} ({'Cached' if cache_name else 'Direct'})"
-            return PaperEvaluation.model_validate_json(response.text), status_tag, elapsed
-        except Exception as e:
-            last_error = e
-            continue
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                        config=types.GenerateContentConfig(**config_kwargs),
+                    ),
+                    timeout=55.0,
+                )
+                elapsed = round(time.perf_counter() - t0, 1)
+                status_tag = f"{model_name} ({'Cached' if (attempt_cached and cache_name) else 'Direct'})"
+                return PaperEvaluation.model_validate_json(response.text), status_tag, elapsed
+            except Exception as e:
+                last_error = e
+                if attempt_cached:
+                    get_cached_book_name.clear()
+                    continue
+                break
 
     raise last_error
 
@@ -691,6 +705,7 @@ with st.container(border=True):
                 st.session_state.my_last_result = None
                 st.session_state.last_meta = None
                 st.session_state.uploader_key += 1
+                gc.collect()
                 st.rerun()
 
 # Sidebar (Also kept in sync)
@@ -720,6 +735,7 @@ with st.sidebar:
             st.session_state.my_last_result = None
             st.session_state.last_meta = None
             st.session_state.uploader_key += 1
+            gc.collect()
             st.rerun()
 
 # Main Workspace
@@ -737,6 +753,7 @@ if shared["session_finished"]:
         st.session_state.my_last_result = None
         st.session_state.last_meta = None
         st.session_state.uploader_key += 1
+        gc.collect()
         st.rerun()
 else:
     with st.container(border=True):
@@ -747,88 +764,3 @@ else:
             exam_type = st.radio("1️⃣ Select Assessment Type:", exam_options, index=default_idx)
             if exam_type != shared["shared_exam_type"]:
                 with shared["lock"]:
-                    shared["shared_exam_type"] = exam_type
-
-        with col_dist:
-            marks_distribution = st.text_input(
-                "2️⃣ Question Marks Rule (Saved for the whole session):",
-                value=shared["shared_marks_distribution"],
-                placeholder="e.g., Essay questions = 2.5 marks each | or: Q1=2.5, Q2=2.5, Q3=5",
-            )
-            if marks_distribution != shared["shared_marks_distribution"]:
-                with shared["lock"]:
-                    shared["shared_marks_distribution"] = marks_distribution
-
-    with st.container(border=True):
-        st.markdown(f"**3️⃣ Snap or Attach Pages for ONE Student (Max {MAX_PAGES_PER_EXAM} pages):**")
-        pages_to_grade = render_mobile_multi_capture(st.session_state.dark_mode, MAX_PAGES_PER_EXAM)
-
-        if pages_to_grade:
-            st.write("")
-            if st.button(
-                f"✨ Grade This Student ({len(pages_to_grade)} page(s))",
-                type="primary",
-                use_container_width=True,
-                disabled=(not api_key or st.session_state.is_grading),
-            ):
-                st.session_state.is_grading = True
-                with st.spinner(f"Grading 1 student ({len(pages_to_grade)} page(s))..."):
-                    try:
-                        result, status_tag, elapsed = asyncio.run(
-                            grade_paper_async(
-                                api_key=api_key,
-                                book_text=book_data["compact_content"],
-                                pages=pages_to_grade,
-                                total_marks=EXAM_TYPES[exam_type],
-                                marks_distribution=shared["shared_marks_distribution"],
-                            )
-                        )
-                        st.session_state.my_last_result = result
-                        st.session_state.last_meta = f"⚡ Graded 1 student ({len(pages_to_grade)} pages) in {elapsed}s via {status_tag}"
-                        st.session_state.uploader_key += 1
-                        with shared["lock"]:
-                            shared["total_graded_papers"] += 1
-                    except Exception as e:
-                        st.error(f"Grading error: {e}")
-                    finally:
-                        st.session_state.is_grading = False
-                st.rerun()
-
-    # Results Section
-    if st.session_state.my_last_result:
-        res = st.session_state.my_last_result
-        if st.session_state.last_meta:
-            st.caption(st.session_state.last_meta)
-
-        badge_bg = "#FFFFFF" if st.session_state.dark_mode else "#09090B"
-        badge_text = "#09090B" if st.session_state.dark_mode else "#FFFFFF"
-
-        st.markdown(
-            f"""
-            <div class="score-banner">
-                <div>
-                    <span style="font-size: 0.85rem; opacity: 0.75; font-weight: 600;">FINAL STUDENT SCORE</span>
-                    <h2 style="margin: 0; font-size: 1.85rem; font-weight: 800;">🏆 {res.total_score} / {res.total_max_score}</h2>
-                </div>
-                <div style="text-align: right;">
-                    <span style="background: {badge_bg}; color: {badge_text}; padding: 6px 14px; border-radius: 20px; font-weight: 700; font-size: 0.88rem;">
-                        {len(res.questions)} Question(s) Evaluated
-                    </span>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        for q in res.questions:
-            icon = "🟢" if q.status == "Correct" else ("🟡" if q.status == "Partially Correct" else "🔴")
-            with st.container(border=True):
-                col1, col2 = st.columns([4.2, 1])
-                with col1:
-                    st.markdown(f"**{icon} Question {q.question_number} — {q.status}**")
-                    st.caption(f"👁️ Detected Mark: {q.visual_mark_found}")
-                    st.write(f"**Student Answer:** {q.student_answer}")
-                    st.write(f"**Correct Answer:** {q.correct_answer}")
-                    st.info(f"**Grading Reason:** {q.reason}")
-                with col2:
-                    st.metric("Score", f"{q.score_awarded} / {q.max_score}")
