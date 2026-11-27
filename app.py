@@ -382,7 +382,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
                     reader.onload = (e) => {{
                         const img = new Image();
                         img.onload = () => {{
-                            const maxDim = 1450;
+                            const maxDim = 1600;
                             let w = img.width;
                             let h = img.height;
                             if (Math.max(w, h) > maxDim) {{
@@ -394,7 +394,7 @@ def render_mobile_multi_capture(dark_mode: bool, max_pages: int = 15) -> List[Tu
                             canvas.height = h;
                             const ctx = canvas.getContext("2d");
                             ctx.drawImage(img, 0, 0, w, h);
-                            resolve(canvas.toDataURL("image/jpeg", 0.85));
+                            resolve(canvas.toDataURL("image/jpeg", 0.86));
                         }};
                         img.src = e.target.result;
                     }};
@@ -506,16 +506,16 @@ def load_prepared_book() -> dict:
 STRICT_SYSTEM_INSTRUCTION = (
     "You are a precise, forensic academic exam grader. Grade student answers strictly against the reference book and respond completely in English.\n"
     "CRITICAL VISUAL INSPECTION & MARK-DETECTION RULES (MANDATORY):\n"
-    "1. DETECT ANY STUDENT MARK: Students often mark answers casually using ANY handwritten mark: a large circle, a tiny circle, a tick/check mark (✓), a small dash/line (-), a dot, an underline, shading, or a written letter/word. Treat ANY non-crossed-out handwritten mark on or next to an option as the student's chosen answer! Do NOT ignore small circles, dashes, or faint ticks.\n"
-    "2. CROSSED-OUT ('X') OVERRIDE RULE: If a student marked an option and then crossed it out with an 'X' or scribbled over it, and marked ANOTHER option instead, IGNORE the crossed-out 'X' option completely and read the non-crossed-out marked option as the student's final answer.\n"
-    "3. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'. Even if the student drew a checkmark (✓) or cross (✗) or wrote T/F, convert it to the exact word 'True' or 'False'.\n"
-    "4. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark/ink/pencil anywhere on or next to the question/options, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
-    "5. NO HALLUCINATION FROM BOOK: Never invent a student answer from the reference book when no mark exists on the paper.\n"
+    "1. SCAN ALL OPTIONS BEFORE DECIDING: Never stop looking after finding the first mark! Inspect EVERY single option (A, B, C, D) and the margin/answer line of the question. Students frequently cross out one option with an 'X' and put a small mark (dash, tiny circle, dot, tick, underline, or letter) on another option.\n"
+    "2. CROSSED-OUT ('X') OVERRIDE RULE: If an option (e.g., B) is crossed out with an 'X' or scribbled over, you MUST keep scanning all other options (A, C, D) and the surrounding space to find the student's replacement mark. Ignore the crossed-out option and take the non-crossed-out marked option as student_answer.\n"
+    "3. DETECT ANY STUDENT MARK: Treat ANY non-crossed-out handwritten mark on or next to an option — large circle, tiny circle, tick/check mark (✓), small dash/line (-), dot, underline, shading, or written letter — as the student's chosen answer.\n"
+    "4. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'.\n"
+    "5. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark anywhere on or next to ANY option, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
     "6. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
-    "   - visual_mark_found: Describe the exact physical mark seen on the paper (e.g., 'Small circle around B (A is crossed out with X)' or 'Checkmark representing True' or 'None').\n"
-    "   - student_answer: The exact option/text the student selected (must be 'True' or 'False' for True/False questions).\n"
-    "   - correct_answer: ALWAYS provide the exact correct answer/choice from the reference book (must be 'True' or 'False' for True/False questions, even when the student is correct).\n"
-    "   - reason: ALWAYS provide a clear 1-2 sentence explanation based on the reference book justifying why the student's answer is correct, partially correct, or incorrect."
+    "   - visual_mark_found: List ALL marks seen across all options (e.g., 'B crossed out with X; small dash next to C').\n"
+    "   - student_answer: The final non-crossed-out option/text the student selected.\n"
+    "   - correct_answer: ALWAYS provide the exact correct answer/choice from the reference book (even when the student is correct).\n"
+    "   - reason: ALWAYS provide a clear 1-2 sentence explanation based on the reference book."
 )
 
 
@@ -528,7 +528,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_marks_v5_{model_name}",
+                display_name=f"book_cache_marks_v6_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -550,15 +550,15 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image(img_bytes: bytes, max_dim: int = 1450) -> Tuple[bytes, str]:
+def optimize_image(img_bytes: bytes, max_dim: int = 1600) -> Tuple[bytes, str]:
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-    img = ImageEnhance.Contrast(img).enhance(1.32)
-    img = ImageEnhance.Sharpness(img).enhance(1.35)
+    img = ImageEnhance.Contrast(img).enhance(1.40)
+    img = ImageEnhance.Sharpness(img).enhance(1.40)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85, optimize=True)
+    img.save(buf, format="JPEG", quality=86, optimize=True)
     return buf.getvalue(), "image/jpeg"
 
 
@@ -580,14 +580,14 @@ async def grade_paper_async(
 
     grading_instructions = (
         "All attached images (1 to 15 pages) belong to ONE SINGLE student's exam submission. "
-        "Inspect every option and answer space carefully before grading:\n"
+        "Scan EVERY option (A, B, C, D) and answer space carefully before grading:\n"
+        "- Never stop scanning after seeing an 'X'. If one option is crossed out with 'X', inspect all remaining options (A, B, C, D) for any mark (tiny circle, dash, dot, tick, underline, or letter) and use that non-crossed-out mark as the student's answer.\n"
         "- Look closely for ANY handwritten mark: big circle, tiny circle, tick (✓), dash (-), dot, underline, shading, or written text. Any such mark counts as the student's chosen answer.\n"
-        "- If an option has an 'X' or scribble crossing it out AND another option has a clean mark, ignore the 'X' option and use the clean marked option.\n"
         "- For ALL True/False questions, ALWAYS output the exact word 'True' or 'False' in student_answer and correct_answer — NEVER use symbols like ✓, ✗, ✔, ✘, or T/F.\n"
         "- Only mark '[BLANK / NO ANSWER]' if there is truly no handwritten mark anywhere on that question.\n"
         "Respond completely in English. For EVERY question on the paper, ALWAYS populate all fields:\n"
-        "1. visual_mark_found: Describe the exact mark visible on the paper.\n"
-        "2. student_answer: State the student's selected option/answer ('True' or 'False' for True/False questions).\n"
+        "1. visual_mark_found: List ALL marks visible across all options on the paper.\n"
+        "2. student_answer: State the student's selected non-crossed-out option/answer ('True' or 'False' for True/False questions).\n"
         "3. correct_answer: ALWAYS state the exact correct answer/choice from the reference book ('True' or 'False' for True/False questions, both when Correct and Incorrect).\n"
         "4. status: 'Correct', 'Partially Correct', or 'Incorrect'.\n"
         f"5. score_awarded & max_score: Assign scores summing to {total_marks}. {distribution_rule}\n"
