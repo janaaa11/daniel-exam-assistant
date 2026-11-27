@@ -24,9 +24,10 @@ st.set_page_config(page_title="Daniel's Exam Assistant", page_icon="🎓", layou
 BOOK_CONTEXT_PATH = "book_context.json"
 MAX_PAGES_PER_EXAM = 15
 
+# Full Flash model first for superior forensic vision on faint pencil marks
 MODELS_TO_TRY = [
-    "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
 ]
 
 EXAM_TYPES = {
@@ -383,7 +384,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                     reader.onload = (e) => {{
                         const img = new Image();
                         img.onload = () => {{
-                            const maxDim = 1800;
+                            const maxDim = 2200;
                             let w = img.width;
                             let h = img.height;
                             if (Math.max(w, h) > maxDim) {{
@@ -395,7 +396,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                             canvas.height = h;
                             const ctx = canvas.getContext("2d");
                             ctx.drawImage(img, 0, 0, w, h);
-                            resolve(canvas.toDataURL("image/jpeg", 0.90));
+                            resolve(canvas.toDataURL("image/jpeg", 0.92));
                         }};
                         img.src = e.target.result;
                     }};
@@ -499,16 +500,17 @@ def load_prepared_book() -> dict:
 
 
 STRICT_SYSTEM_INSTRUCTION = (
-    "You are a precise, forensic academic exam grader. Grade student answers strictly against the reference book and respond completely in English.\n"
+    "You are a forensic academic exam grader with microscope-level visual inspection. Grade student answers strictly against the reference book and respond completely in English.\n"
     "CRITICAL VISUAL INSPECTION & OPTION-BY-OPTION AUDIT RULES (MANDATORY):\n"
-    "1. MANDATORY OPTION-BY-OPTION AUDIT FIRST: Before deciding student_answer, you MUST inspect EVERY single printed option (A, B, C, D) individually and record its exact physical state in 'options_visual_audit' (e.g., 'A: clean | B: crossed out with X | C: thin grey pencil circle | D: clean').\n"
-    "2. CANCELLATION ('X' / SCRIBBLE) RULE: An 'X', cross-out, or scribble over an option means it is CANCELLED/REJECTED. NEVER pick a crossed-out option! Look at the remaining clean options for the student's actual mark.\n"
-    "3. PENCIL & FAINT MARK DETECTION: Students frequently use thin grey graphite pencil. Look closely at the pixels around each option letter and text for thin grey pencil circles, ticks (✓), dashes (-), dots, or underlines. Do NOT mistake paper shadows, folds, or printed borders for a circle—verify the stroke actually encloses or marks a specific option.\n"
-    "4. INCLUDE FULL ANSWER TEXT WITH LETTER (MANDATORY): For ALL Multiple Choice (MCQ) questions, NEVER write just 'A' or 'B' alone! Always write BOTH the option letter AND its full printed text from the exam paper in both student_answer and correct_answer (e.g., 'B) Central Processing Unit' instead of just 'B').\n"
-    "5. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'.\n"
-    "6. TRULY BLANK ANSWERS: Only if ALL options in options_visual_audit are completely clean with zero handwritten marks, set student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
-    "7. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
-    "   - options_visual_audit: Individual visual status of every option (A, B, C, D) or answer space.\n"
+    "1. USE ZOOMED CROPS TO INSPECT EVERY OPTION LETTER (a), (b), (c), (d): You are given BOTH the full page AND zoomed-in top/bottom crops of each page. Use the zoomed crops to inspect the tiny area right around each printed option letter '(a)', '(b)', '(c)', '(d)' and its text.\n"
+    "2. SMALL PENCIL CIRCLES AROUND OPTION LETTERS: Students frequently draw a small, thin grey graphite pencil circle ONLY around the tiny option letter itself — such as circling '(c)' or '(b)' — or make a small tick/dash next to it. Look closely for ANY hand-drawn loop/circle enclosing '(a)', '(b)', '(c)', or '(d)'.\n"
+    "3. CANCELLATION ('X' / SCRIBBLE) RULE: An 'X', cross-out lines, or scribbling over an option letter/text means it is CANCELLED/REJECTED. NEVER pick a crossed-out option! Look at the remaining options in the zoomed crop to find the non-crossed-out circled/marked option.\n"
+    "4. MANDATORY OPTION-BY-OPTION AUDIT FIRST: Record the exact physical state of EVERY option in 'options_visual_audit' (e.g., '(a): clean | (b): clean | (c): small pencil circle around (c) | (d): crossed out with X').\n"
+    "5. INCLUDE FULL ANSWER TEXT WITH LETTER (MANDATORY): For ALL Multiple Choice (MCQ) questions, NEVER write just 'a' or 'b' alone! Always write BOTH the option letter AND its full printed text from the exam paper in both student_answer and correct_answer (e.g., 'c) Microsoft Windows' instead of just 'c').\n"
+    "6. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'.\n"
+    "7. TRULY BLANK ANSWERS: Only if ALL options in the zoomed crop are 100% clean with zero handwritten marks, set student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
+    "8. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION:\n"
+    "   - options_visual_audit: Individual visual check of every option (a), (b), (c), (d) or answer space.\n"
     "   - student_answer: Derived strictly from the non-crossed-out marked option in options_visual_audit (letter + full text, or 'True'/'False').\n"
     "   - correct_answer: ALWAYS provide the exact correct option letter + full option text (or 'True'/'False') from the reference book, even when the student is correct.\n"
     "   - reason: ALWAYS provide a clear 1-2 sentence explanation based on the reference book."
@@ -524,7 +526,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_marks_v9_{model_name}",
+                display_name=f"book_cache_marks_v10_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -546,17 +548,52 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image(img_bytes: bytes, max_dim: int = 1800) -> Tuple[bytes, str]:
+def _enhance_for_pencil(pil_img: Image.Image) -> bytes:
+    """Darken faint grey graphite pencil strokes while calming bright white paper glare."""
+    enhanced = ImageOps.autocontrast(pil_img, cutoff=1)
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(0.93)
+    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.50)
+    enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.65)
+    buf = io.BytesIO()
+    enhanced.save(buf, format="JPEG", quality=92, optimize=True)
+    return buf.getvalue()
+
+
+def build_forensic_page_views(img_bytes: bytes, page_num: int) -> List[types.Part]:
+    """
+    Create a pencil-enhanced full-page view PLUS overlapping zoomed top & bottom crops
+    so tiny pencil circles around (a), (b), (c), (d) occupy 2x more visual tokens.
+    """
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
-    if max(img.size) > max_dim:
-        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-    img = ImageOps.autocontrast(img, cutoff=1)
-    img = ImageEnhance.Contrast(img).enhance(1.25)
-    img = ImageEnhance.Sharpness(img).enhance(1.60)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90, optimize=True)
-    return buf.getvalue(), "image/jpeg"
+    w, h = img.size
+
+    # Full page (capped at 2000px)
+    full_img = img.copy()
+    if max(w, h) > 2000:
+        full_img.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
+
+    parts: List[types.Part] = [
+        types.Part.from_text(text=f"--- Page {page_num}: Full Overview ---"),
+        types.Part.from_bytes(data=_enhance_for_pencil(full_img), mime_type="image/jpeg"),
+    ]
+
+    # Add overlapping Top & Bottom zoomed crops for tall/portrait exam pages
+    if h > w * 1.1:
+        top_crop = img.crop((0, 0, w, int(h * 0.58)))
+        bot_crop = img.crop((0, int(h * 0.42), w, h))
+        for crop_img in (top_crop, bot_crop):
+            if max(crop_img.size) > 1800:
+                crop_img.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
+
+        parts.extend([
+            types.Part.from_text(text=f"--- Page {page_num}: ZOOMED TOP HALF (inspect small pencil circles around a/b/c/d here) ---"),
+            types.Part.from_bytes(data=_enhance_for_pencil(top_crop), mime_type="image/jpeg"),
+            types.Part.from_text(text=f"--- Page {page_num}: ZOOMED BOTTOM HALF (inspect small pencil circles around a/b/c/d here) ---"),
+            types.Part.from_bytes(data=_enhance_for_pencil(bot_crop), mime_type="image/jpeg"),
+        ])
+
+    return parts
 
 
 async def grade_paper_async(
@@ -576,14 +613,15 @@ async def grade_paper_async(
     )
 
     grading_instructions = (
-        "All attached images (1 to 15 pages) belong to ONE SINGLE student's exam submission. "
-        "Perform a strict forensic visual inspection of EVERY option (A, B, C, D) before grading:\n"
-        "- STEP 1 (options_visual_audit): Check A, B, C, D individually and write what is on each (e.g., 'A: clean | B: crossed out with X | C: thin grey pencil circle | D: clean').\n"
-        "- STEP 2 (student_answer): Pick ONLY the option that has a clean, non-crossed-out mark (pencil circle, dash, dot, tick, underline). NEVER pick an option marked with 'X' or scribbled out. Always include BOTH letter and full option text (e.g., 'C) Hard Disk Drive').\n"
+        "All attached images belong to ONE SINGLE student's exam submission (each page includes a full view + zoomed top/bottom views). "
+        "Do NOT duplicate questions that appear in the overlap between top and bottom crops—output each unique question ONCE in order.\n"
+        "Perform a strict forensic visual inspection of EVERY option (a, b, c, d) using the ZOOMED views:\n"
+        "- STEP 1 (options_visual_audit): Inspect the tiny printed letters (a), (b), (c), (d) in the zoomed crops. Look for small thin grey pencil circles drawn right around '(a)', '(b)', '(c)', or '(d)', as well as any 'X' cross-outs. Record each option's exact status.\n"
+        "- STEP 2 (student_answer): Pick ONLY the non-crossed-out option that has a pencil/pen circle, tick, dash, or underline. NEVER pick an option crossed out with 'X'. Always include BOTH option letter and full printed option text (e.g., 'c) Microsoft Windows').\n"
         "- For ALL True/False questions, ALWAYS output the exact word 'True' or 'False' in student_answer and correct_answer — NEVER use symbols like ✓, ✗, ✔, ✘, or T/F.\n"
-        "- Only mark '[BLANK / NO ANSWER]' if ALL options are completely clean with zero handwritten marks.\n"
-        "Respond completely in English. For EVERY question on the paper, ALWAYS populate all fields:\n"
-        "1. options_visual_audit: Individual visual check of A, B, C, D.\n"
+        "- Only mark '[BLANK / NO ANSWER]' if ALL options in the zoomed views are 100% clean with zero handwritten marks.\n"
+        "Respond completely in English. For EVERY unique question on the paper, ALWAYS populate all fields:\n"
+        "1. options_visual_audit: Individual visual check of (a), (b), (c), (d).\n"
         "2. student_answer: Selected non-crossed-out option letter + full answer text (or 'True'/'False').\n"
         "3. correct_answer: ALWAYS state the exact correct option letter + full answer text (or 'True'/'False') from the reference book, both when Correct and Incorrect.\n"
         "4. status: 'Correct', 'Partially Correct', or 'Incorrect'.\n"
@@ -593,10 +631,9 @@ async def grade_paper_async(
         f"Rubric / Distribution: {marks_distribution if marks_distribution.strip() else 'Auto'}"
     )
 
-    optimized_parts = []
-    for img_bytes, _ in pages:
-        opt_bytes, opt_mime = optimize_image(img_bytes)
-        optimized_parts.append(types.Part.from_bytes(data=opt_bytes, mime_type=opt_mime))
+    visual_parts: List[types.Part] = []
+    for idx, (img_bytes, _) in enumerate(pages, start=1):
+        visual_parts.extend(build_forensic_page_views(img_bytes, idx))
 
     last_error = None
     for model_name in MODELS_TO_TRY:
@@ -608,12 +645,13 @@ async def grade_paper_async(
                     "response_mime_type": "application/json",
                     "response_schema": PaperEvaluation,
                     "temperature": 0.0,
+                    "media_resolution": types.MediaResolution.MEDIA_RESOLUTION_HIGH,
                 }
                 if attempt_cached and cache_name:
-                    contents = [grading_instructions] + optimized_parts
+                    contents = [grading_instructions] + visual_parts
                     config_kwargs["cached_content"] = cache_name
                 else:
-                    contents = [f"### Reference Book:\n{book_text}\n\n{grading_instructions}"] + optimized_parts
+                    contents = [f"### Reference Book:\n{book_text}\n\n{grading_instructions}"] + visual_parts
                     config_kwargs["system_instruction"] = STRICT_SYSTEM_INSTRUCTION
 
                 response = await asyncio.wait_for(
@@ -622,7 +660,7 @@ async def grade_paper_async(
                         contents=contents,
                         config=types.GenerateContentConfig(**config_kwargs),
                     ),
-                    timeout=55.0,
+                    timeout=65.0,
                 )
                 elapsed = round(time.perf_counter() - t0, 1)
                 status_tag = f"{model_name} ({'Cached' if (attempt_cached and cache_name) else 'Direct'})"
