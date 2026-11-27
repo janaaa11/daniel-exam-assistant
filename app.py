@@ -297,7 +297,6 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
     btn_bg = "#FFFFFF" if dark_mode else "#09090B"
     btn_fg = "#09090B" if dark_mode else "#FFFFFF"
 
-    # Notice: reset_token is embedded inside the HTML so every new student forces a brand-new clean JS instance
     html_code = f"""
     <!DOCTYPE html>
     <html>
@@ -384,7 +383,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                     reader.onload = (e) => {{
                         const img = new Image();
                         img.onload = () => {{
-                            const maxDim = 1600;
+                            const maxDim = 1800;
                             let w = img.width;
                             let h = img.height;
                             if (Math.max(w, h) > maxDim) {{
@@ -396,7 +395,7 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
                             canvas.height = h;
                             const ctx = canvas.getContext("2d");
                             ctx.drawImage(img, 0, 0, w, h);
-                            resolve(canvas.toDataURL("image/jpeg", 0.88));
+                            resolve(canvas.toDataURL("image/jpeg", 0.90));
                         }};
                         img.src = e.target.result;
                     }};
@@ -482,7 +481,6 @@ def render_mobile_multi_capture(dark_mode: bool, reset_token: int, max_pages: in
     payload = comp_func(key=f"multi_cap_v2_{reset_token}", default={"token": reset_token, "images": []})
 
     pages: List[Tuple[bytes, str]] = []
-    # Only accept images that strictly belong to the current reset_token!
     if isinstance(payload, dict) and payload.get("token") == reset_token:
         raw_list = payload.get("images", [])
         for data_url in raw_list:
@@ -508,12 +506,14 @@ STRICT_SYSTEM_INSTRUCTION = (
     "   - After seeing an 'X' or scribble on one option, you MUST inspect ALL remaining options (A, B, C, D) and the surrounding margins/spaces very carefully to find the student's actual replacement mark (which may be a small dash '-', tiny circle, dot, tick '✓', underline, or written letter).\n"
     "   - If option B is crossed out with 'X' and option C has a small dash/circle/dot, the student's answer is C (NOT B!).\n"
     "   - If an option is crossed out with 'X' and NO other option has any mark at all, set student_answer = '[CANCELLED / NO VALID SELECTION]' and score_awarded = 0.\n"
-    "2. DETECT ANY VALID SELECTION MARK: Any non-crossed-out handwritten mark on or next to an option — large circle, tiny circle, tick/check mark (✓), small dash/line (-), dot, underline, shading, or written letter — counts as the student's chosen answer.\n"
+    "2. DETECT ANY VALID SELECTION MARK & GRAPHITE PENCIL STROKES:\n"
+    "   - Any non-crossed-out handwritten mark on or next to an option — large circle, tiny circle, tick/check mark (✓), small dash/line (-), dot, underline, shading, or written letter — counts as the student's chosen answer.\n"
+    "   - PENCIL / GRAPHITE MARKS: Students frequently use thin grey graphite pencil. Look carefully for thin grey pencil strokes, circles, or ticks around the true chosen option, and do NOT confuse paper shadows, creases, or printed borders with a pencil circle.\n"
     "3. INCLUDE FULL ANSWER TEXT WITH LETTER (MANDATORY): For ALL Multiple Choice (MCQ) questions, NEVER write just 'A' or 'B' alone! Always write BOTH the option letter AND its full printed text from the exam paper in both student_answer and correct_answer (e.g., 'B) Central Processing Unit' instead of just 'B').\n"
     "4. TRUE / FALSE FORMATTING RULE (MANDATORY): For ALL True/False questions, ALWAYS write the explicit words 'True' or 'False' in both student_answer and correct_answer — NEVER output symbols like '✓', '✗', '✔', '✘', or abbreviations like 'T'/'F'.\n"
     "5. TRULY BLANK ANSWERS: Only if there is ZERO handwritten mark anywhere on or next to ANY option, set visual_mark_found = 'None (blank)', student_answer = '[BLANK / NO ANSWER]', status = 'Incorrect', and score_awarded = 0.\n"
     "6. MANDATORY UNIFIED OUTPUT FOR EVERY QUESTION (WHETHER CORRECT OR INCORRECT):\n"
-    "   - visual_mark_found: Report what is seen on EVERY marked/crossed option (e.g., 'B is crossed out with X (rejected); small dash next to C (selected)').\n"
+    "   - visual_mark_found: Report what is seen on EVERY marked/crossed option (e.g., 'B is crossed out with X (rejected); thin grey pencil circle around C (selected)').\n"
     "   - student_answer: The selected option letter + full option text (or 'True'/'False').\n"
     "   - correct_answer: ALWAYS provide the exact correct option letter + full option text (or 'True'/'False') from the reference book, even when the student is correct.\n"
     "   - reason: ALWAYS provide a clear 1-2 sentence explanation based on the reference book."
@@ -529,7 +529,7 @@ def get_cached_book_name(api_key: str, model_name: str, book_text: str) -> Optio
         cache = client.caches.create(
             model=model_name,
             config=types.CreateCachedContentConfig(
-                display_name=f"book_cache_marks_v7_{model_name}",
+                display_name=f"book_cache_marks_v8_{model_name}",
                 system_instruction=STRICT_SYSTEM_INSTRUCTION,
                 contents=[f"### Reference Book Content:\n{book_text}"],
                 ttl="7200s",
@@ -551,15 +551,16 @@ def get_shared_session() -> dict:
     }
 
 
-def optimize_image(img_bytes: bytes, max_dim: int = 1600) -> Tuple[bytes, str]:
+def optimize_image(img_bytes: bytes, max_dim: int = 1800) -> Tuple[bytes, str]:
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img).convert("RGB")
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-    img = ImageEnhance.Contrast(img).enhance(1.40)
-    img = ImageEnhance.Sharpness(img).enhance(1.40)
+    img = ImageOps.autocontrast(img, cutoff=1)
+    img = ImageEnhance.Contrast(img).enhance(1.22)
+    img = ImageEnhance.Sharpness(img).enhance(1.45)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=88, optimize=True)
+    img.save(buf, format="JPEG", quality=90, optimize=True)
     return buf.getvalue(), "image/jpeg"
 
 
@@ -582,7 +583,8 @@ async def grade_paper_async(
     grading_instructions = (
         "All attached images (1 to 15 pages) belong to ONE SINGLE student's exam submission. "
         "Inspect EVERY option (A, B, C, D) and answer space carefully before grading:\n"
-        "- CRITICAL: An 'X' or scribble over an option means that option is CANCELLED/REJECTED — NEVER select a crossed-out option as the student's answer! Keep looking at all other options (A, B, C, D) for any clean mark (small dash '-', tiny circle, dot, tick, underline, or letter) and choose that non-crossed-out option.\n"
+        "- CRITICAL: An 'X' or scribble over an option means that option is CANCELLED/REJECTED — NEVER select a crossed-out option as the student's answer! Keep looking at all other options (A, B, C, D) for any clean mark (thin grey pencil circle, small dash '-', dot, tick, underline, or letter) and choose that non-crossed-out option.\n"
+        "- PENCIL MARKS: Look closely for thin grey graphite pencil strokes/circles; do not mistake paper shadows or creases for pencil marks.\n"
         "- CRITICAL FORMAT: For Multiple Choice questions, ALWAYS include BOTH the option letter AND the full text of the choice (e.g., 'C) Hard Disk Drive'), NEVER just 'C' alone.\n"
         "- For ALL True/False questions, ALWAYS output the exact word 'True' or 'False' in student_answer and correct_answer — NEVER use symbols like ✓, ✗, ✔, ✘, or T/F.\n"
         "- Only mark '[BLANK / NO ANSWER]' if there is truly no handwritten mark anywhere on that question.\n"
@@ -787,7 +789,6 @@ else:
         )
 
         if pages_to_grade:
-            # Clear previous student's displayed result as soon as new pages are attached
             st.session_state.my_last_result = None
             st.session_state.last_meta = None
             st.write("")
